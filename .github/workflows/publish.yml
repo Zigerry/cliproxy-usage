@@ -1,0 +1,41 @@
+---
+name: Publish
+
+"on":
+  workflow_dispatch:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - name: Publish package
+        env:
+          NPM_CONFIG_PROVENANCE: "true"
+        run: |
+          package="$(npm pkg get name | tr -d '\"')"
+          version="$(npm pkg get version | tr -d '\"')"
+          if npm view "${package}@${version}" version >/dev/null 2>&1; then
+            echo "Version already published; skipping."
+          else
+            npm publish --access public
+          fi
