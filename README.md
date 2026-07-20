@@ -14,7 +14,7 @@ Percentages and filled bars show usage **consumed**. Colors shift green → yell
 
 ## Requirements
 
-- [Pi Coding Agent](https://github.com/badlogic/pi-mono)
+- [Pi Coding Agent](https://github.com/earendil-works/pi)
 - [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) with at least one Claude, Codex, or Grok account configured
 
 ## Install
