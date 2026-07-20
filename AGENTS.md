@@ -36,13 +36,13 @@ npm pack --dry-run
 
 ## Git and PRs
 
-- Open an issue with problem context before creating a PR. Typo or documentation-only fixes may skip it.
-- Link PRs to their issue, preferably with `Closes #123`.
-- Do not commit directly to `main`.
-- Create focused branches: `feat/...`, `fix/...`, `refactor/...`, `test/...`, `chore/...`.
+- Features and bug fixes require an issue, focused branch, and PR.
+- Link feature and fix PRs to their issue, preferably with `Closes #123`.
+- Small documentation, test, refactor, chore, and release changes may commit directly to `main`; use a PR only when review adds value.
+- Create focused branches when using a PR: `feat/...`, `fix/...`, `refactor/...`, `test/...`, `chore/...`.
 - Keep commits atomic. Do not mix unrelated cleanup with feature changes.
-- Before opening or updating a PR, ensure tests and type checks pass.
-- PR description should state what changed, why, and how it was verified.
+- Before pushing, ensure relevant tests and type checks pass.
+- PR descriptions should state what changed, why, and how it was verified.
 
 ## Conventional Commits
 
