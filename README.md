@@ -2,13 +2,6 @@
 
 Compact CLIProxyAPI account usage meters for Pi Coding Agent.
 
-Code layout:
-
-- `index.ts` — Pi lifecycle and command wiring
-- `src/settings.ts` / `src/settings-ui.ts` — persisted and interactive settings
-- `src/usage.ts` / `src/parsers.ts` — account discovery, provider requests, response mapping
-- `src/ui.ts` — widget rendering and text formatting
-
 Shows one colored line below editor per enabled account:
 
 ```text
@@ -19,11 +12,18 @@ Shows one colored line below editor per enabled account:
 
 Percentages and filled bars show usage **consumed**. Colors shift green → yellow at 70% → red at 90%. Codex intentionally shows Session only; weekly meter is omitted.
 
+## Requirements
+
+- [Pi Coding Agent](https://github.com/badlogic/pi-mono)
+- [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) with at least one Claude, Codex, or Grok account configured
+
 ## Install
 
 ```bash
 pi install npm:pi-cliproxy-usage
 ```
+
+After installing or updating, run `/reload` in Pi.
 
 Or test directly:
 
@@ -62,3 +62,11 @@ Accepted values: `accountsDir` is a non-empty string, `refreshMinutes` is an int
 - `/cliproxy-usage config` — compatibility alias for `settings`
 
 Token refresh is deliberately left to CLIProxyAPI. If provider returns `401`/`403`, let CLIProxyAPI refresh account or log in again.
+
+## Screenshot
+
+![CLIProxyAPI usage widget](docs/preview.png)
+
+## Support
+
+Report bugs and request features in [GitHub Issues](https://github.com/Villoh/pi-cliproxy-usage/issues).
