@@ -41,6 +41,7 @@ Older `~/.pi/agent/extensions/pi-cliproxy-usage/config.json` files migrate autom
 {
   "accountsDir": "~/.cli-proxy-api",
   "refreshMinutes": 5,
+  "maxVisibleAccounts": 4,
   "providers": {
     "claude": true,
     "codex": true,
@@ -51,7 +52,7 @@ Older `~/.pi/agent/extensions/pi-cliproxy-usage/config.json` files migrate autom
 
 Extension reads top-level CLIProxyAPI auth JSON files with `type` equal to `claude`, `codex`, or `xai`. Disabled auth files are skipped. Credentials stay local and are sent only to official provider usage endpoints documented by OpenUsage.
 
-Accepted values: `accountsDir` is a non-empty string, `refreshMinutes` is an integer of at least `1`, and provider values are booleans. Invalid values are ignored with a warning. Unknown fields are preserved when saving.
+Accepted values: `accountsDir` is a non-empty string; `refreshMinutes` and `maxVisibleAccounts` are integers of at least `1`; provider values are booleans. Widget prioritizes errors, then accounts with highest usage, and shows an overflow row when more accounts exist. Invalid values are ignored with a warning. Unknown fields are preserved when saving.
 
 ## Commands
 

@@ -52,9 +52,17 @@ test("renderUsage separates provider, account, and usage", () => {
 		},
 	} satisfies UiContext;
 
-	renderUsage(ctx, [
-		{ provider: "claude", label: "user@example.com", session: { used: 50 } },
-	]);
+	renderUsage(
+		ctx,
+		[
+			{
+				provider: "claude",
+				label: "user@example.com",
+				session: { used: 50 },
+			},
+		],
+		4,
+	);
 	const factory = widget as (
 		tui: unknown,
 		theme: Theme,
@@ -62,6 +70,46 @@ test("renderUsage separates provider, account, and usage", () => {
 	assert.equal(
 		factory(undefined, theme).render(100)[0],
 		"● Claude │ user@example.com │ S █████░░░░░ 50%\u001b[0m",
+	);
+});
+
+test("renderUsage limits rows and prioritizes errors then highest usage", () => {
+	let widget: unknown;
+	const theme: Theme = { fg: (_color, text) => text };
+	const ctx = {
+		mode: "interactive",
+		ui: {
+			theme,
+			setStatus() {},
+			setWidget: (_id, content) => {
+				widget = content;
+			},
+			notify() {},
+			select: async () => undefined,
+			input: async () => undefined,
+		},
+	} satisfies UiContext;
+
+	renderUsage(
+		ctx,
+		[
+			{ provider: "claude", label: "low", session: { used: 10 } },
+			{ provider: "codex", label: "high", session: { used: 90 } },
+			{ provider: "grok", label: "broken", error: "HTTP 401" },
+		],
+		2,
+	);
+	const factory = widget as (
+		tui: unknown,
+		theme: Theme,
+	) => { render(width: number): string[] };
+	const lines = factory(undefined, theme).render(100);
+	assert.equal(lines.length, 3);
+	assert.match(lines[0] ?? "", /broken/);
+	assert.match(lines[1] ?? "", /high/);
+	assert.equal(
+		lines[2],
+		"… 1 more account · /cliproxy-usage for details\u001b[0m",
 	);
 });
 

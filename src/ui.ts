@@ -79,18 +79,37 @@ export function clearUsage(ctx: UiContext): void {
 	ctx.ui.setWidget("cliproxy-usage", undefined);
 }
 
-export function renderUsage(ctx: UiContext, items: AccountUsage[]): void {
+export function renderUsage(
+	ctx: UiContext,
+	items: AccountUsage[],
+	maxVisibleAccounts: number,
+): void {
 	ctx.ui.setStatus("cliproxy-usage", undefined);
 	if (!items.length) {
 		ctx.ui.setWidget("cliproxy-usage", undefined);
 		return;
 	}
+	const visibleItems = items
+		.map((item, index) => ({
+			item,
+			index,
+			priority: item.error
+				? Number.POSITIVE_INFINITY
+				: Math.max(item.session?.used ?? -1, item.weekly?.used ?? -1),
+		}))
+		.sort(
+			(left, right) =>
+				right.priority - left.priority || left.index - right.index,
+		)
+		.slice(0, maxVisibleAccounts)
+		.map(({ item }) => item);
+	const hiddenCount = items.length - visibleItems.length;
 	ctx.ui.setWidget(
 		"cliproxy-usage",
 		(_tui: unknown, theme: Theme) => ({
 			invalidate() {},
 			render(width: number): string[] {
-				return items.map((item) => {
+				const lines = visibleItems.map((item) => {
 					const providerColor =
 						item.provider === "claude"
 							? "warning"
@@ -126,6 +145,18 @@ export function renderUsage(ctx: UiContext, items: AccountUsage[]): void {
 						width,
 					);
 				});
+				if (hiddenCount) {
+					lines.push(
+						truncateAnsi(
+							theme.fg(
+								"dim",
+								`… ${hiddenCount} more account${hiddenCount === 1 ? "" : "s"} · /cliproxy-usage for details`,
+							),
+							width,
+						),
+					);
+				}
+				return lines;
 			},
 		}),
 		{ placement: "belowEditor" },

@@ -5,6 +5,7 @@ import type { Settings } from "./types.js";
 export const DEFAULT_SETTINGS: Settings = {
 	accountsDir: "~/.cli-proxy-api",
 	refreshMinutes: 5,
+	maxVisibleAccounts: 4,
 	providers: { claude: true, codex: true, grok: true },
 };
 
@@ -46,6 +47,15 @@ export function normalizeSettings(value: unknown): {
 		settings.refreshMinutes = value.refreshMinutes;
 	} else if (value.refreshMinutes !== undefined) {
 		warnings.push("ignored invalid refreshMinutes");
+	}
+	if (
+		typeof value.maxVisibleAccounts === "number" &&
+		Number.isInteger(value.maxVisibleAccounts) &&
+		value.maxVisibleAccounts > 0
+	) {
+		settings.maxVisibleAccounts = value.maxVisibleAccounts;
+	} else if (value.maxVisibleAccounts !== undefined) {
+		warnings.push("ignored invalid maxVisibleAccounts");
 	}
 	for (const provider of ["claude", "codex", "grok"] as const) {
 		if (typeof providers[provider] === "boolean") {

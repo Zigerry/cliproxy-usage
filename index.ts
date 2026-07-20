@@ -31,7 +31,7 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify(loaded.warnings.join("; "), "warning");
 			}
 			const items = await readAccounts(loaded.settings);
-			renderUsage(ctx, items);
+			renderUsage(ctx, items, loaded.settings.maxVisibleAccounts);
 			if (notify) {
 				ctx.ui.notify(
 					formatDetails(items),
@@ -64,6 +64,7 @@ export default function (pi: ExtensionAPI) {
 				`Settings: ${loaded.path}`,
 				`Accounts: ${loaded.settings.accountsDir}`,
 				`Refresh: ${loaded.settings.refreshMinutes} min`,
+				`Visible accounts: ${loaded.settings.maxVisibleAccounts}`,
 				`Providers: ${providers || "none"}`,
 				`Source: ${Object.keys(loaded.raw).length ? "settings file" : "defaults"}`,
 			].join("\n"),

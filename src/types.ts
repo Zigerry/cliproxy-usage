@@ -3,6 +3,7 @@ export type ProviderName = "claude" | "codex" | "grok";
 export type Settings = {
 	accountsDir: string;
 	refreshMinutes: number;
+	maxVisibleAccounts: number;
 	providers: Record<ProviderName, boolean>;
 };
 

@@ -28,15 +28,21 @@ test("normalizeSettings validates values and preserves raw fields", () => {
 	const loaded = normalizeSettings({
 		accountsDir: 1,
 		refreshMinutes: 10,
+		maxVisibleAccounts: 0,
 		providers: { claude: false, codex: "yes", future: true },
 		future: { enabled: true },
 	});
 	assert.equal(loaded.settings.accountsDir, DEFAULT_SETTINGS.accountsDir);
 	assert.equal(loaded.settings.refreshMinutes, 10);
+	assert.equal(
+		loaded.settings.maxVisibleAccounts,
+		DEFAULT_SETTINGS.maxVisibleAccounts,
+	);
 	assert.equal(loaded.settings.providers.claude, false);
 	assert.deepEqual(loaded.raw.future, { enabled: true });
 	assert.deepEqual(loaded.warnings, [
 		"ignored invalid accountsDir",
+		"ignored invalid maxVisibleAccounts",
 		"ignored invalid providers.codex",
 	]);
 });

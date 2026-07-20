@@ -9,6 +9,7 @@ import type { Config } from "../src/types.js";
 const config = (accountsDir: string): Config => ({
 	accountsDir,
 	refreshMinutes: 5,
+	maxVisibleAccounts: 4,
 	providers: { claude: true, codex: true, grok: true },
 });
 
