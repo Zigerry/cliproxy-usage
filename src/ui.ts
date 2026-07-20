@@ -13,8 +13,7 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
 };
 
 function accountLabel(label: string): string {
-	const local = label.includes("@") ? label.split("@")[0] : label;
-	return local.slice(0, 18);
+	return label;
 }
 
 export function usageBar(used: number, width = 10): string {

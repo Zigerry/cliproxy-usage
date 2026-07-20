@@ -17,7 +17,7 @@ test("usageBar clamps usage and supports custom widths", () => {
 	assert.equal(usageBar(150), "██████████");
 });
 
-test("formatCompact renders provider labels, truncates email, and separates accounts", () => {
+test("formatCompact renders full account labels and separates accounts", () => {
 	assert.equal(
 		formatCompact([
 			{
@@ -29,7 +29,7 @@ test("formatCompact renders provider labels, truncates email, and separates acco
 			{ provider: "codex", label: "work", session: { used: 0 } },
 		]),
 		[
-			"Claude very-long-account-  S █████░░░░░ 50%  W ██████████ 100%",
+			"Claude very-long-account-name@example.com  S █████░░░░░ 50%  W ██████████ 100%",
 			"Codex work  S ░░░░░░░░░░ 0%",
 		].join("\n"),
 	);
@@ -61,7 +61,7 @@ test("renderUsage separates provider, account, and usage", () => {
 	) => { render(width: number): string[] };
 	assert.equal(
 		factory(undefined, theme).render(100)[0],
-		"● Claude │ user │ S █████░░░░░ 50%\u001b[0m",
+		"● Claude │ user@example.com │ S █████░░░░░ 50%\u001b[0m",
 	);
 });
 
