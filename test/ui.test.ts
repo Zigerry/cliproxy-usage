@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatCompact, formatDetails, usageBar } from "../src/ui.js";
+import {
+	formatCompact,
+	formatDetails,
+	renderUsage,
+	usageBar,
+} from "../src/ui.js";
+import type { Theme, UiContext } from "../src/types.js";
 
 test("usageBar clamps usage and supports custom widths", () => {
 	assert.equal(usageBar(-10), "░░░░░░░░░░");
@@ -26,6 +32,36 @@ test("formatCompact renders provider labels, truncates email, and separates acco
 			"Claude very-long-account-  S █████░░░░░ 50%  W ██████████ 100%",
 			"Codex work  S ░░░░░░░░░░ 0%",
 		].join("\n"),
+	);
+});
+
+test("renderUsage separates provider, account, and usage", () => {
+	let widget: unknown;
+	const theme: Theme = { fg: (_color, text) => text };
+	const ctx = {
+		mode: "interactive",
+		ui: {
+			theme,
+			setStatus() {},
+			setWidget: (_id, content) => {
+				widget = content;
+			},
+			notify() {},
+			select: async () => undefined,
+			input: async () => undefined,
+		},
+	} satisfies UiContext;
+
+	renderUsage(ctx, [
+		{ provider: "claude", label: "user@example.com", session: { used: 50 } },
+	]);
+	const factory = widget as (
+		tui: unknown,
+		theme: Theme,
+	) => { render(width: number): string[] };
+	assert.equal(
+		factory(undefined, theme).render(100)[0],
+		"● Claude │ user │ S █████░░░░░ 50%\u001b[0m",
 	);
 });
 
