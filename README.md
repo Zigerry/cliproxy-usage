@@ -66,7 +66,7 @@ Token refresh is deliberately left to CLIProxyAPI. If provider returns `401`/`40
 
 ## Screenshot
 
-![CLIProxyAPI usage widget](assets/preview.png)
+![CLIProxyAPI usage widget](https://raw.githubusercontent.com/Villoh/pi-cliproxy-usage/main/assets/preview.png)
 
 ## Support
 
