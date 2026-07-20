@@ -106,7 +106,7 @@ export function renderUsage(ctx: UiContext, items: AccountUsage[]): void {
 						separator;
 					if (item.error) {
 						return truncateAnsi(
-							`${prefix}  ${theme.fg("error", `! ${item.error}`)}`,
+							`${prefix}${theme.fg("error", `! ${item.error}`)}`,
 							width,
 						);
 					}
@@ -123,7 +123,7 @@ export function renderUsage(ctx: UiContext, items: AccountUsage[]): void {
 						item.weekly && meter("W", item.weekly),
 					].filter(Boolean);
 					return truncateAnsi(
-						`${prefix}  ${windows.join(theme.fg("dim", "  │  "))}`,
+						`${prefix}${windows.join(theme.fg("dim", "  │  "))}`,
 						width,
 					);
 				});
