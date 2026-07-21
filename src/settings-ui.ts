@@ -18,7 +18,7 @@ export async function showSettings(
 	ctx: ExtensionCommandContext,
 	settingsPath: string,
 	legacySettingsPath: string,
-	onChange: (settings: Settings) => Promise<void>,
+	onChange: (settings: Settings, changedId: string) => Promise<void>,
 ): Promise<void> {
 	if (ctx.mode !== "tui") {
 		if (ctx.hasUI)
@@ -55,7 +55,7 @@ export async function showSettings(
 			},
 			{
 				id: "refreshMinutes",
-				label: "Refresh interval",
+				label: "Refresh interval (min)",
 				description: "Minutes between automatic usage refreshes",
 				currentValue: String(settings.refreshMinutes),
 				values: ["1", "5", "10", "15", "30", "60"],
@@ -101,7 +101,7 @@ export async function showSettings(
 				saveQueue = saveQueue
 					.then(async () => {
 						raw = await saveSettings(next, raw, settingsPath);
-						await onChange(next);
+						await onChange(next, id);
 					})
 					.catch((error) => {
 						settings = previous;

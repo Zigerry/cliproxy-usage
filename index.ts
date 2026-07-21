@@ -48,8 +48,19 @@ export default function (pi: ExtensionAPI) {
 		timer.unref?.();
 	};
 
-	const applySettings = async (ctx: ExtensionContext, settings: Settings) => {
+	const applySettings = async (
+		ctx: ExtensionContext,
+		settings: Settings,
+		changedId: string,
+	) => {
 		scheduleRefresh(ctx, settings.refreshMinutes);
+		// Only refetch when something that affects the fetched data changed.
+		// Interval/display-only changes (refreshMinutes, maxVisibleAccounts) must
+		// not trigger a request, or every settings tweak burns an API call and
+		// risks rate limiting.
+		if (changedId === "refreshMinutes" || changedId === "maxVisibleAccounts") {
+			return;
+		}
 		await refresh(ctx);
 	};
 
@@ -104,7 +115,7 @@ export default function (pi: ExtensionAPI) {
 					ctx,
 					SETTINGS_PATH,
 					LEGACY_SETTINGS_PATH,
-					(settings) => applySettings(ctx, settings),
+					(settings, changedId) => applySettings(ctx, settings, changedId),
 				);
 			}
 			if (action === "status") return showStatus(ctx);
