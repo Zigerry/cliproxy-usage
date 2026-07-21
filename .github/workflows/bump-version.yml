@@ -43,3 +43,4 @@ jobs:
           set -euo pipefail
           npm version "$VERSION_BUMP" -m "chore(release): v%s"
           git push origin "HEAD:$BRANCH" --follow-tags
+
