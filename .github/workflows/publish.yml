@@ -3,6 +3,11 @@ name: Publish
 
 "on":
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to publish
+        required: true
+        type: string
   push:
     tags: ["v*.*.*"]
 
@@ -11,7 +16,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: publish-${{ github.ref_name }}
+  group: publish-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -20,6 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: ${{ inputs.tag || github.ref }}
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:

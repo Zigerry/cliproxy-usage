@@ -39,10 +39,12 @@ jobs:
       - name: Bump, commit, and tag
         env:
           BRANCH: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
           VERSION_BUMP: ${{ inputs.version_bump }}
         run: |
           set -euo pipefail
           npm version "$VERSION_BUMP" -m "chore(release): v%s"
+          tag="v$(npm pkg get version | tr -d '\"')"
           git push origin "HEAD:$BRANCH" --follow-tags
-          gh workflow run Publish --ref "v$(npm pkg get version | tr -d '\"')"
-          gh workflow run Release --ref "v$(npm pkg get version | tr -d '\"')"
+          gh workflow run Publish --ref "$BRANCH" -f tag="$tag"
+          gh workflow run Release --ref "$BRANCH" -f tag="$tag"
