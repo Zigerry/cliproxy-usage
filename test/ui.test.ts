@@ -35,9 +35,15 @@ test("formatCompact renders full account labels and separates accounts", () => {
 	);
 });
 
-test("renderUsage separates provider, account, and usage", () => {
+test("renderUsage colors Claude orange and Codex/Grok white", () => {
 	let widget: unknown;
-	const theme: Theme = { fg: (_color, text) => text };
+	const colors: string[] = [];
+	const theme: Theme = {
+		fg: (color, text) => {
+			colors.push(color);
+			return text;
+		},
+	};
 	const ctx = {
 		mode: "interactive",
 		ui: {
@@ -69,8 +75,26 @@ test("renderUsage separates provider, account, and usage", () => {
 	) => { render(width: number): string[] };
 	assert.equal(
 		factory(undefined, theme).render(100)[0],
-		"● Claude │ user@example.com │ S █████░░░░░ 50%\u001b[0m",
+		"Claude │ user@example.com │ S █████░░░░░ 50%\u001b[0m",
 	);
+	assert.ok(colors.includes("warning"));
+
+	colors.length = 0;
+	renderUsage(
+		ctx,
+		[
+			{ provider: "codex", label: "work" },
+			{ provider: "grok", label: "team" },
+		],
+		4,
+	);
+	(
+		widget as (
+			tui: unknown,
+			theme: Theme,
+		) => { render(width: number): string[] }
+	)(undefined, theme).render(100);
+	assert.equal(colors.filter((color) => color === "text").length, 2);
 });
 
 test("renderUsage limits rows and prioritizes errors then highest usage", () => {
