@@ -9,12 +9,12 @@ import {
 import type { Theme, UiContext } from "../src/types.js";
 
 test("usageBar clamps usage and supports custom widths", () => {
-	assert.equal(usageBar(-10), "░░░░░░░░░░");
-	assert.equal(usageBar(0), "░░░░░░░░░░");
-	assert.equal(usageBar(25), "███░░░░░░░");
-	assert.equal(usageBar(50, 4), "██░░");
-	assert.equal(usageBar(100), "██████████");
-	assert.equal(usageBar(150), "██████████");
+	assert.equal(usageBar(-10), "──────────");
+	assert.equal(usageBar(0), "──────────");
+	assert.equal(usageBar(25), "━━━───────");
+	assert.equal(usageBar(50, 4), "━━──");
+	assert.equal(usageBar(100), "━━━━━━━━━━");
+	assert.equal(usageBar(150), "━━━━━━━━━━");
 });
 
 test("formatCompact renders full account labels and separates accounts", () => {
@@ -29,8 +29,8 @@ test("formatCompact renders full account labels and separates accounts", () => {
 			{ provider: "codex", label: "work", session: { used: 0 } },
 		]),
 		[
-			"Claude very-long-account-name@example.com  S █████░░░░░ 50%  W ██████████ 100%",
-			"Codex work  S ░░░░░░░░░░ 0%",
+			"Claude very-long-account-name@example.com  S ━━━━━───── 50%  W ━━━━━━━━━━ 100%",
+			"Codex work  S ────────── 0%",
 		].join("\n"),
 	);
 });
@@ -75,7 +75,7 @@ test("renderUsage colors Claude orange and Codex/Grok white", () => {
 	) => { render(width: number): string[] };
 	assert.equal(
 		factory(undefined, theme).render(100)[0],
-		"\u001b[38;5;208mClaude\u001b[0m │ user@example.com │ S █████░░░░░ 50%\u001b[0m",
+		"\u001b[38;5;208mClaude\u001b[0m │ user@example.com │ S ━━━━━───── 50%\u001b[0m",
 	);
 	assert.equal(colors.filter((color) => color === "text").length, 2);
 

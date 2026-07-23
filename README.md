@@ -5,9 +5,9 @@ Compact CLIProxyAPI account usage meters for Pi Coding Agent.
 Shows one colored line below editor per enabled account:
 
 ```text
-● Claude │ user │ S ███████░░░ 70%  │  W ████░░░░░░ 40%
-● Codex │ user │ S █████████░ 90%
-● Grok │ user │ W █████░░░░░ 50%
+● Claude │ user │ S ━━━━━━━─── 70%  │  W ━━━━────── 40%
+● Codex │ user │ S ━━━━━━━━━─ 90%
+● Grok │ user │ W ━━━━━───── 50%
 ```
 
 Percentages and filled bars show usage **consumed**. Colors shift green → yellow at 70% → red at 90%. Codex intentionally shows Session only; weekly meter is omitted.
