@@ -75,7 +75,7 @@ test("renderUsage colors Claude orange and Codex/Grok white", () => {
 	) => { render(width: number): string[] };
 	assert.equal(
 		factory(undefined, theme).render(100)[0],
-		"● Claude │ user@example.com │ S █████░░░░░ 50%\u001b[0m",
+		"Claude │ user@example.com │ S █████░░░░░ 50%\u001b[0m",
 	);
 	assert.ok(colors.includes("warning"));
 

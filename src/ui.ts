@@ -113,7 +113,7 @@ export function renderUsage(
 					const providerColor = item.provider === "claude" ? "warning" : "text";
 					const separator = theme.fg("dim", " │ ");
 					const prefix =
-						theme.fg(providerColor, `● ${PROVIDER_LABELS[item.provider]}`) +
+						theme.fg(providerColor, PROVIDER_LABELS[item.provider]) +
 						separator +
 						theme.fg("muted", accountLabel(item.label)) +
 						separator;
