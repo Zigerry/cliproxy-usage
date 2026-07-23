@@ -11,6 +11,7 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
 	codex: "Codex",
 	grok: "Grok",
 };
+const CLAUDE_ORANGE = "\u001b[38;5;208m";
 
 function accountLabel(label: string): string {
 	return label;
@@ -110,10 +111,13 @@ export function renderUsage(
 			invalidate() {},
 			render(width: number): string[] {
 				const lines = visibleItems.map((item) => {
-					const providerColor = item.provider === "claude" ? "warning" : "text";
+					const providerLabel =
+						item.provider === "claude"
+							? `${CLAUDE_ORANGE}${PROVIDER_LABELS.claude}\u001b[0m`
+							: theme.fg("text", PROVIDER_LABELS[item.provider]);
 					const separator = theme.fg("dim", " │ ");
 					const prefix =
-						theme.fg(providerColor, PROVIDER_LABELS[item.provider]) +
+						providerLabel +
 						separator +
 						theme.fg("muted", accountLabel(item.label)) +
 						separator;
@@ -126,7 +130,7 @@ export function renderUsage(
 					const meter = (name: string, usage: UsageWindow) => {
 						const used = Math.max(0, Math.min(100, usage.used));
 						const color =
-							used >= 90 ? "error" : used >= 70 ? "warning" : "success";
+							used >= 90 ? "error" : used >= 70 ? "warning" : "text";
 						const filled = usageBar(used).replace(/░+$/, "");
 						const empty = "░".repeat(10 - filled.length);
 						return `${theme.fg("muted", name)} ${theme.fg(color, filled)}${theme.fg("dim", empty)} ${theme.fg(color, `${Math.round(used)}%`)}`;
