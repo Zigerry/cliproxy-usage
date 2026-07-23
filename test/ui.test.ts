@@ -97,6 +97,41 @@ test("renderUsage colors Claude orange and Codex/Grok white", () => {
 	assert.equal(colors.filter((color) => color === "text").length, 2);
 });
 
+test("renderUsage aligns separators across providers and accounts", () => {
+	let widget: unknown;
+	const theme: Theme = { fg: (_color, text) => text };
+	const ctx = {
+		mode: "interactive",
+		ui: {
+			theme,
+			setStatus() {},
+			setWidget: (_id, content) => {
+				widget = content;
+			},
+			notify() {},
+			select: async () => undefined,
+			input: async () => undefined,
+		},
+	} satisfies UiContext;
+
+	renderUsage(
+		ctx,
+		[
+			{ provider: "claude", label: "a", session: { used: 50 } },
+			{ provider: "codex", label: "long", session: { used: 0 } },
+		],
+		4,
+	);
+	const factory = widget as (
+		tui: unknown,
+		theme: Theme,
+	) => { render(width: number): string[] };
+	assert.deepEqual(factory(undefined, theme).render(100), [
+		"\u001b[38;5;208mClaude\u001b[0m │ a    │ S ━━━━━───── 50%\u001b[0m",
+		"Codex  │ long │ S ────────── 0%\u001b[0m",
+	]);
+});
+
 test("renderUsage limits rows and prioritizes errors then highest usage", () => {
 	let widget: unknown;
 	const theme: Theme = { fg: (_color, text) => text };

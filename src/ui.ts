@@ -105,21 +105,29 @@ export function renderUsage(
 		.slice(0, maxVisibleAccounts)
 		.map(({ item }) => item);
 	const hiddenCount = items.length - visibleItems.length;
+	const providerWidth = Math.max(
+		...visibleItems.map((item) => PROVIDER_LABELS[item.provider].length),
+	);
+	const accountWidth = Math.max(
+		...visibleItems.map((item) => accountLabel(item.label).length),
+	);
 	ctx.ui.setWidget(
 		"cliproxy-usage",
 		(_tui: unknown, theme: Theme) => ({
 			invalidate() {},
 			render(width: number): string[] {
 				const lines = visibleItems.map((item) => {
+					const providerText =
+						PROVIDER_LABELS[item.provider].padEnd(providerWidth);
 					const providerLabel =
 						item.provider === "claude"
-							? `${CLAUDE_ORANGE}${PROVIDER_LABELS.claude}\u001b[0m`
-							: theme.fg("text", PROVIDER_LABELS[item.provider]);
+							? `${CLAUDE_ORANGE}${providerText}\u001b[0m`
+							: theme.fg("text", providerText);
 					const separator = theme.fg("dim", " │ ");
 					const prefix =
 						providerLabel +
 						separator +
-						theme.fg("muted", accountLabel(item.label)) +
+						theme.fg("muted", accountLabel(item.label).padEnd(accountWidth)) +
 						separator;
 					if (item.error) {
 						return truncateAnsi(
