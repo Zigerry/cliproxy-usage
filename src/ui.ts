@@ -110,12 +110,7 @@ export function renderUsage(
 			invalidate() {},
 			render(width: number): string[] {
 				const lines = visibleItems.map((item) => {
-					const providerColor =
-						item.provider === "claude"
-							? "warning"
-							: item.provider === "codex"
-								? "success"
-								: "accent";
+					const providerColor = item.provider === "claude" ? "warning" : "text";
 					const separator = theme.fg("dim", " │ ");
 					const prefix =
 						theme.fg(providerColor, `● ${PROVIDER_LABELS[item.provider]}`) +
