@@ -20,7 +20,7 @@ function accountLabel(label: string): string {
 export function usageBar(used: number, width = 10): string {
 	const percent = Math.max(0, Math.min(100, used));
 	const filled = Math.round((percent / 100) * width);
-	return "█".repeat(filled) + "░".repeat(width - filled);
+	return "━".repeat(filled) + "─".repeat(width - filled);
 }
 
 export function formatCompact(items: AccountUsage[]): string {
@@ -131,8 +131,8 @@ export function renderUsage(
 						const used = Math.max(0, Math.min(100, usage.used));
 						const color =
 							used >= 90 ? "error" : used >= 70 ? "warning" : "text";
-						const filled = usageBar(used).replace(/░+$/, "");
-						const empty = "░".repeat(10 - filled.length);
+						const filled = usageBar(used).replace(/─+$/, "");
+						const empty = "─".repeat(10 - filled.length);
 						return `${theme.fg("muted", name)} ${theme.fg(color, filled)}${theme.fg("dim", empty)} ${theme.fg(color, `${Math.round(used)}%`)}`;
 					};
 					const windows = [
