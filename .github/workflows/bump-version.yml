@@ -12,6 +12,7 @@ name: Bump version
         default: patch
 
 permissions:
+  actions: write
   contents: write
 
 concurrency:
@@ -43,4 +44,5 @@ jobs:
           set -euo pipefail
           npm version "$VERSION_BUMP" -m "chore(release): v%s"
           git push origin "HEAD:$BRANCH" --follow-tags
-
+          gh workflow run Publish --ref "v$(npm pkg get version | tr -d '\"')"
+          gh workflow run Release --ref "v$(npm pkg get version | tr -d '\"')"
