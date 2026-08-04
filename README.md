@@ -118,6 +118,11 @@ npm run check
 npm pack --dry-run
 ```
 
+The published npm package is intentionally minimal. Its allowlist includes only
+`index.ts`, `src/`, and `README.md`; npm also includes `package.json` and
+`LICENSE`. Tests, assets, repository instructions, and local configuration are
+not published.
+
 ## Support
 
 Report bugs and request features at [Zigerry/pi-cliproxyapi-oauth-usage](https://github.com/Zigerry/pi-cliproxyapi-oauth-usage/issues).
