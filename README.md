@@ -218,8 +218,12 @@ npm pack --dry-run
 
 The published npm package is intentionally minimal. Its allowlist includes only
 `index.ts`, `src/`, and `README.md`; npm also includes `package.json` and
-`LICENSE`. Tests, assets, repository instructions, and local configuration are
-not published.
+`LICENSE`. Tests, repository instructions, and local configuration are not
+published.
+
+## Credits
+
+Originally created by Villoh and currently maintained by Zigerry.
 
 ## Support
 

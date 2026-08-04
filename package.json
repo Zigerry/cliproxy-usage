@@ -9,6 +9,10 @@
     "usage"
   ],
   "license": "MIT",
+  "author": "Zigerry",
+  "contributors": [
+    "Villoh"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Zigerry/cliproxy-usage.git"
