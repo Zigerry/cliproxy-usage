@@ -26,22 +26,27 @@ const config = (): Config => ({
 	},
 });
 
-test("resolveManagementSource reuses provider base URL by default", async () => {
+test("resolveManagementSource normalizes supported CLIProxyAPI base URLs", async () => {
 	const dir = await mkdtemp(join(tmpdir(), "pi-cliproxy-usage-"));
 	try {
 		const providerConfigPath = join(dir, "cliproxyapi.json");
-		await writeFile(
-			providerConfigPath,
-			JSON.stringify({ baseUrl: "http://127.0.0.1:9274/" }),
-		);
-		assert.deepEqual(
-			await resolveManagementSource(config(), providerConfigPath),
-			{
-				providerBaseUrl: "http://127.0.0.1:9274",
-				managementUrl: "http://127.0.0.1:9274",
-				managementKeyConfigured: false,
-			},
-		);
+		for (const [baseUrl, expected] of [
+			["http://127.0.0.1:9274", "http://127.0.0.1:9274"],
+			["http://127.0.0.1:9274/", "http://127.0.0.1:9274"],
+			["http://127.0.0.1:9274/v1", "http://127.0.0.1:9274"],
+			["http://127.0.0.1:9274/v1/", "http://127.0.0.1:9274"],
+			["https://proxy.example.com/cliproxy/v1", "https://proxy.example.com/cliproxy"],
+		] as const) {
+			await writeFile(providerConfigPath, JSON.stringify({ baseUrl }));
+			assert.deepEqual(
+				await resolveManagementSource(config(), providerConfigPath),
+				{
+					providerBaseUrl: expected,
+					managementUrl: expected,
+					managementKeyConfigured: false,
+				},
+			);
+		}
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
