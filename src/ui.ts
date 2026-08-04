@@ -95,13 +95,9 @@ function ansiWidth(text: string): number {
 	).length;
 }
 
-function padAnsi(text: string, width: number): string {
-	return text + " ".repeat(Math.max(0, width - ansiWidth(text)));
-}
-
 function fitPlain(text: string, width: number): string {
 	const points = Array.from(text);
-	if (points.length <= width) return text.padEnd(width);
+	if (points.length <= width) return text;
 	if (width <= 1) return "…".slice(0, width);
 	return `${points.slice(0, width - 1).join("")}…`;
 }
@@ -139,92 +135,90 @@ export function renderUsage(
 		(_tui: unknown, theme: Theme) => ({
 			invalidate() {},
 			render(width: number): string[] {
-				const columns = Math.min(
-					visibleItems.length,
-					width >= 165 ? 3 : width >= 104 ? 2 : 1,
-				);
-				const gap = 2;
-				const cellWidth = Math.max(
-					1,
-					Math.floor((width - gap * (columns - 1)) / columns),
-				);
-				const barWidth = columns === 3 ? 4 : columns === 2 ? 6 : 8;
+				const gap = 4;
 				const providers = new Set(visibleItems.map((item) => item.provider));
 				const groupedProvider =
 					providers.size === 1 && visibleItems.length > 1
 						? visibleItems[0]?.provider
 						: undefined;
-				const providerWidth = groupedProvider
-					? 0
-					: Math.max(
-							...visibleItems.map(
-								(item) => PROVIDER_LABELS[item.provider].length,
-							),
-						);
 				const styledProvider = (provider: ProviderName, text: string) =>
 					provider === "claude"
 						? `${CLAUDE_ORANGE}${text}\u001b[0m`
 						: theme.fg("text", text);
-				const meter = (window: UsageWindow) => {
-					const remaining = remainingPercent(window);
-					const color = remainingColor(remaining);
-					const bar = usageBar(remaining, barWidth);
-					const filled = bar.match(/^━*/)?.[0] ?? "";
-					const empty = bar.slice(filled.length);
-					return [
-						theme.fg("muted", window.label),
-						`${theme.fg(color, filled)}${theme.fg("dim", empty)}`,
-						theme.fg(color, `left ${Math.round(remaining)}%`),
-					].join(" ");
+				const labelLimit = visibleItems.length > 1 ? 18 : 24;
+				const buildCards = (barWidth: number, styled: boolean) =>
+					visibleItems.map((item) => {
+						const paint = (color: string, text: string) =>
+							styled ? theme.fg(color, text) : text;
+						const separator = paint("dim", " │ ");
+						const account = paint(
+							"muted",
+							fitPlain(accountLabel(item.label), labelLimit),
+						);
+						const provider = styled
+							? styledProvider(item.provider, PROVIDER_LABELS[item.provider])
+							: PROVIDER_LABELS[item.provider];
+						const prefix = groupedProvider
+							? account + separator
+							: provider + separator + account + separator;
+						let content: string;
+						if (item.error) {
+							content = paint("error", `! ${item.error}`);
+						} else {
+							const meters = item.windows.map((window) => {
+								const remaining = remainingPercent(window);
+								const color = remainingColor(remaining);
+								const bar = usageBar(remaining, barWidth);
+								const filled = bar.match(/^━*/)?.[0] ?? "";
+								const empty = bar.slice(filled.length);
+								return [
+									paint("muted", window.label),
+									`${paint(color, filled)}${paint("dim", empty)}`,
+									paint(color, `left ${Math.round(remaining)}%`),
+								].join(" ");
+							});
+							content = meters.length
+								? meters.join(paint("dim", " │ "))
+								: paint("dim", "–");
+						}
+						const card = `${prefix}${content}`;
+						return truncateAnsi(card, Math.min(width, ansiWidth(card)));
+					});
+				const packCards = (cards: string[]): string[][] => {
+					const rows: string[][] = [];
+					let row: string[] = [];
+					let rowWidth = 0;
+					for (const card of cards) {
+						const cardWidth = ansiWidth(card);
+						const nextWidth =
+							rowWidth + (row.length ? gap : 0) + cardWidth;
+						if (row.length && (row.length >= 3 || nextWidth > width)) {
+							rows.push(row);
+							row = [];
+							rowWidth = 0;
+						}
+						rowWidth += (row.length ? gap : 0) + cardWidth;
+						row.push(card);
+					}
+					if (row.length) rows.push(row);
+					return rows;
 				};
-				const contents = visibleItems.map((item) => {
-					if (item.error) return theme.fg("error", `! ${item.error}`);
-					const meters = item.windows.map(meter);
-					return meters.length
-						? meters.join(theme.fg("dim", " │ "))
-						: theme.fg("dim", "–");
+				const candidates = [8, 6, 4].map((barWidth) => {
+					const rows = packCards(buildCards(barWidth, false));
+					return {
+						barWidth,
+						rows,
+						maxColumns: Math.max(...rows.map((row) => row.length)),
+					};
 				});
-				const maxContentWidth = Math.max(
-					...contents.map((content) =>
-						Math.max(1, Math.min(ansiWidth(content), cellWidth - 8)),
-					),
+				candidates.sort(
+					(left, right) =>
+						left.rows.length - right.rows.length ||
+						right.maxColumns - left.maxColumns ||
+						right.barWidth - left.barWidth,
 				);
-				const prefixWidth = groupedProvider ? 3 : providerWidth + 6;
-				const accountBudget = Math.max(
-					6,
-					Math.min(
-						24,
-						cellWidth - prefixWidth - Math.max(1, maxContentWidth),
-					),
-				);
-				const accountWidth = Math.max(
-					1,
-					Math.min(
-						accountBudget,
-						Math.max(
-							...visibleItems.map(
-								(item) => Array.from(accountLabel(item.label)).length,
-							),
-						),
-					),
-				);
-				const cards = visibleItems.map((item, index) => {
-					const separator = theme.fg("dim", " │ ");
-					const account = theme.fg(
-						"muted",
-						fitPlain(accountLabel(item.label), accountWidth),
-					);
-					const prefix = groupedProvider
-						? account + separator
-						: styledProvider(
-								item.provider,
-								PROVIDER_LABELS[item.provider].padEnd(providerWidth),
-							) +
-							separator +
-							account +
-							separator;
-					return truncateAnsi(`${prefix}${contents[index]}`, cellWidth);
-				});
+				const layout = candidates[0];
+				const rows = packCards(buildCards(layout?.barWidth ?? 8, true));
 				const lines: string[] = [];
 				if (groupedProvider) {
 					const count = items.length;
@@ -238,17 +232,8 @@ export function renderUsage(
 						),
 					);
 				}
-				for (let index = 0; index < cards.length; index += columns) {
-					const row = cards.slice(index, index + columns);
-					lines.push(
-						row
-							.map((card, cellIndex) =>
-								cellIndex < row.length - 1
-									? padAnsi(card, cellWidth)
-									: card,
-							)
-							.join(" ".repeat(gap)),
-					);
+				for (const row of rows) {
+					lines.push(row.join(" ".repeat(gap)));
 				}
 				if (hiddenCount) {
 					lines.push(

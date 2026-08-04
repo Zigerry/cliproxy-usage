@@ -9,7 +9,7 @@ Codex │ user │ 7d ━━━━━━── left 69%
 Kimi  │ user │ 7d ━━━━──── left 50% │ 5h ━━━━━━━━ left 95%
 ```
 
-Multiple matching accounts use a responsive grid. Wide terminals show three columns, medium terminals show two, and narrow terminals fall back to one. The provider appears once as a compact group heading, long account labels are truncated, and bar width adapts to the column count:
+Multiple matching accounts use a content-aware compact layout. Cards keep their natural width and are packed left-to-right with a fixed gap, up to three per row. The renderer prioritizes fewer rows, then uses the longest progress bar that still fits. Codex cards often fit three per row because they only contain `7d`; wider Kimi cards naturally fit fewer. The provider appears once as a compact group heading and long account labels are truncated:
 
 ```text
 Codex quota · 3 accounts

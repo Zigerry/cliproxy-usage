@@ -157,8 +157,8 @@ test("renderUsage packs two cards into one row when width allows", () => {
 	assert.equal(lines.length, 1);
 	assert.match(lines[0] ?? "", /Claude/);
 	assert.match(lines[0] ?? "", /Codex/);
-	assert.match(lines[0] ?? "", /7d ━━━─── left 50%/);
-	assert.match(lines[0] ?? "", /7d ━━━━── left 69%/);
+	assert.match(lines[0] ?? "", /7d ━━━━──── left 50%/);
+	assert.match(lines[0] ?? "", /7d ━━━━━━── left 69%/);
 });
 
 test("renderUsage switches between three, two, and one account columns", () => {
@@ -179,12 +179,12 @@ test("renderUsage switches between three, two, and one account columns", () => {
 	assert.match(wide[1] ?? "", /beta/);
 	assert.match(wide[1] ?? "", /gamma/);
 
-	const medium = render(120);
+	const medium = render(70);
 	assert.equal(medium.length, 3);
 	assert.match(medium[1] ?? "", /gamma.*beta/);
 	assert.match(medium[2] ?? "", /alpha/);
 
-	const narrow = render(80);
+	const narrow = render(40);
 	assert.equal(narrow.length, 4);
 });
 
