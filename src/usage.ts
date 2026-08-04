@@ -24,6 +24,18 @@ type RemoteAuthFile = {
 	status_message?: string;
 };
 
+type OpenAICompatibilityKey = {
+	"auth-index"?: string;
+};
+
+type OpenAICompatibilityProvider = {
+	name?: string;
+	disabled?: boolean;
+	"base-url"?: string;
+	"auth-index"?: string;
+	"api-key-entries"?: OpenAICompatibilityKey[];
+};
+
 type UsageResponse = { body: unknown; headers: Headers };
 
 type RemoteApiCallResponse = {
@@ -263,6 +275,58 @@ async function readAuthFiles(
 	return value.files.map((item) => item as RemoteAuthFile);
 }
 
+function isOfficialDeepSeekUrl(value?: string): boolean {
+	if (!value) return false;
+	try {
+		return new URL(value).hostname.toLowerCase() === "api.deepseek.com";
+	} catch {
+		return false;
+	}
+}
+
+async function readDeepSeekAuthFiles(
+	baseUrl: string,
+	managementKey: string,
+): Promise<RemoteAuthFile[]> {
+	const response = await managementRequest(
+		baseUrl,
+		managementKey,
+		"/openai-compatibility",
+	);
+	const value = (await response.json()) as {
+		"openai-compatibility"?: unknown;
+	};
+	const providers = value["openai-compatibility"];
+	if (!Array.isArray(providers)) {
+		throw new Error("invalid management openai-compatibility response");
+	}
+	const files: RemoteAuthFile[] = [];
+	for (const item of providers) {
+		const provider = item as OpenAICompatibilityProvider;
+		if (provider.disabled || !isOfficialDeepSeekUrl(provider["base-url"])) {
+			continue;
+		}
+		const indexes = [
+			provider["auth-index"],
+			...(provider["api-key-entries"] ?? []).map(
+				(entry) => entry["auth-index"],
+			),
+		].filter((index): index is string => Boolean(index));
+		const uniqueIndexes = [...new Set(indexes)];
+		for (const [index, authIndex] of uniqueIndexes.entries()) {
+			files.push({
+				auth_index: authIndex,
+				provider: "deepseek",
+				label:
+					uniqueIndexes.length > 1
+						? `${provider.name || "DeepSeek"} ${index + 1}`
+						: provider.name || "DeepSeek",
+			});
+		}
+	}
+	return files;
+}
+
 export async function validateManagementAccess(
 	config: Config,
 	providerConfigPath?: string,
@@ -417,18 +481,44 @@ export async function readAccounts(
 			source.managementUrl,
 			config.managementKey,
 		);
-		const accounts = files
+		let deepSeekFiles: RemoteAuthFile[] = [];
+		let deepSeekDiscoveryError: AccountUsage | undefined;
+		if (config.providers.deepseek) {
+			try {
+				deepSeekFiles = await readDeepSeekAuthFiles(
+					source.managementUrl,
+					config.managementKey,
+				);
+			} catch (error) {
+				deepSeekDiscoveryError = {
+					provider: "deepseek",
+					label: "remote",
+					windows: [],
+					error: managementErrorMessage(error),
+				};
+			}
+		}
+		const accounts = [...files, ...deepSeekFiles]
 			.map((auth) => ({ auth, provider: remoteProvider(auth) }))
 			.filter(
 				(entry): entry is { auth: RemoteAuthFile; provider: ProviderName } =>
 					Boolean(
 						entry.provider &&
 							!entry.auth.disabled &&
-							config.providers[entry.provider],
+							config.providers[entry.provider] &&
+							(entry.provider !== "deepseek" ||
+								deepSeekFiles.includes(entry.auth)),
 					),
 			);
-		return Promise.all(
-			accounts.map(({ auth, provider }) =>
+		const seen = new Set<string>();
+		const uniqueAccounts = accounts.filter(({ auth, provider }) => {
+			const key = `${provider}:${auth.auth_index || auth.name || auth.label || ""}`;
+			if (seen.has(key)) return false;
+			seen.add(key);
+			return true;
+		});
+		const results = await Promise.all(
+			uniqueAccounts.map(({ auth, provider }) =>
 				fetchRemoteUsage(
 					source.managementUrl as string,
 					config.managementKey,
@@ -437,6 +527,8 @@ export async function readAccounts(
 				),
 			),
 		);
+		if (deepSeekDiscoveryError) results.push(deepSeekDiscoveryError);
+		return results;
 	} catch (error) {
 		if (
 			error instanceof ManagementHttpError &&
