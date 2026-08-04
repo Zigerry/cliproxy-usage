@@ -54,13 +54,13 @@ Other model families hide the widget because there is no matching quota or balan
 From this repository:
 
 ```bash
-pi install https://github.com/Zigerry/pi-cliproxyapi-oauth-usage.git
+pi install https://github.com/Zigerry/pi-cliproxy-usage.git
 ```
 
 Or install a local development checkout:
 
 ```bash
-pi install /absolute/path/to/pi-cliproxyapi-oauth-usage
+pi install /absolute/path/to/pi-cliproxy-usage
 ```
 
 After installing or updating, run `/reload` in Pi.
@@ -125,4 +125,4 @@ not published.
 
 ## Support
 
-Report bugs and request features at [Zigerry/pi-cliproxyapi-oauth-usage](https://github.com/Zigerry/pi-cliproxyapi-oauth-usage/issues).
+Report bugs and request features at [Zigerry/pi-cliproxy-usage](https://github.com/Zigerry/pi-cliproxy-usage/issues).

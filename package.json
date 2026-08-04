@@ -11,7 +11,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Villoh/pi-cliproxy-usage.git"
+    "url": "git+https://github.com/Zigerry/pi-cliproxy-usage.git"
   },
   "files": [
     "index.ts",
