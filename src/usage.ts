@@ -1,7 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { parseClaude, parseCodex, parseGrok, toNumber } from "./parsers.js";
+import { parseClaude, parseCodex, parseGrok, parseKimi, toNumber } from "./parsers.js";
 import type { AccountUsage, Config, ProviderName } from "./types.js";
 
 type AuthFile = {
@@ -12,11 +12,12 @@ type AuthFile = {
 	disabled?: boolean;
 };
 
-const PROVIDERS = new Set<ProviderName>(["claude", "codex", "grok"]);
+const PROVIDERS = new Set<ProviderName>(["claude", "codex", "grok", "kimi"]);
 const USAGE_URLS = {
 	claude: "https://api.anthropic.com/api/oauth/usage",
 	codex: "https://chatgpt.com/backend-api/wham/usage",
 	grok: "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
+	kimi: "https://api.kimi.com/coding/v1/usages",
 } as const;
 
 function expandHome(path: string): string {
@@ -32,6 +33,30 @@ function providerName(type?: string): ProviderName | undefined {
 	return PROVIDERS.has(provider as ProviderName)
 		? (provider as ProviderName)
 		: undefined;
+}
+
+/** Map the active Pi model to the matching CLIProxyAPI OAuth account type. */
+export function providerForModel(
+	provider: string,
+	modelId: string,
+): ProviderName | undefined {
+	const value = `${provider}/${modelId}`.toLowerCase();
+	if (/(^|[\/_-])claude(?:[.\/_-]|$)/.test(value)) return "claude";
+	if (/(^|[\/_-])(?:gpt|codex)(?:[.\/_-]|$)/.test(value)) return "codex";
+	if (/(^|[\/_-])(?:kimi|moonshot)(?:[.\/_-]|$)/.test(value)) return "kimi";
+	if (/(^|[\/_-])(?:grok|xai)(?:[.\/_-]|$)/.test(value)) return "grok";
+	return undefined;
+}
+
+export function accountsForModel(
+	items: AccountUsage[],
+	provider: string,
+	modelId: string,
+): AccountUsage[] {
+	const accountProvider = providerForModel(provider, modelId);
+	return accountProvider
+		? items.filter((item) => item.provider === accountProvider)
+		: [];
 }
 
 async function request(
@@ -58,7 +83,8 @@ async function fetchUsage(
 	file: string,
 ): Promise<AccountUsage> {
 	const label =
-		auth.email || basename(file, ".json").replace(/^(claude|codex|xai)-/, "");
+		auth.email ||
+		basename(file, ".json").replace(/^(claude|codex|xai|kimi)-/, "");
 	try {
 		if (!auth.access_token) throw new Error("missing access_token");
 		if (provider === "claude") {
@@ -77,13 +103,19 @@ async function fetchUsage(
 				headers,
 			);
 			const parsed = parseCodex(response.body);
-			if (!parsed.session) {
+			if (!parsed.windows.length) {
 				const used = toNumber(
 					response.headers.get("x-codex-primary-used-percent"),
 				);
-				if (used !== undefined) parsed.session = { used };
+				if (used !== undefined) {
+					parsed.windows.push({ label: "limit", used });
+				}
 			}
 			return { provider, label, ...parsed };
+		}
+		if (provider === "kimi") {
+			const { body } = await request(USAGE_URLS.kimi, auth.access_token);
+			return { provider, label, ...parseKimi(body) };
 		}
 		const { body } = await request(USAGE_URLS.grok, auth.access_token, {
 			"X-XAI-Token-Auth": "xai-grok-cli",
@@ -93,6 +125,7 @@ async function fetchUsage(
 		return {
 			provider,
 			label,
+			windows: [],
 			error: error instanceof Error ? error.message : String(error),
 		};
 	}

@@ -3,14 +3,18 @@ import test from "node:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readAccounts } from "../src/usage.js";
-import type { Config } from "../src/types.js";
+import {
+	accountsForModel,
+	providerForModel,
+	readAccounts,
+} from "../src/usage.js";
+import type { AccountUsage, Config } from "../src/types.js";
 
 const config = (accountsDir: string): Config => ({
 	accountsDir,
 	refreshMinutes: 5,
 	maxVisibleAccounts: 4,
-	providers: { claude: true, codex: true, grok: true },
+	providers: { claude: true, codex: true, grok: true, kimi: true },
 });
 
 test("readAccounts returns empty for missing directory", async () => {
@@ -61,10 +65,44 @@ test("readAccounts reports missing token without making a request", async () => 
 			{
 				provider: "grok",
 				label: "me@example.com",
+				windows: [],
 				error: "missing access_token",
 			},
 		]);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
+});
+
+test("providerForModel maps CLIProxyAPI model ids to OAuth account types", () => {
+	assert.equal(providerForModel("cliproxyapi", "gpt-5.6-sol"), "codex");
+	assert.equal(providerForModel("cliproxyapi", "gpt-5.3-codex-spark"), "codex");
+	assert.equal(providerForModel("cliproxyapi", "kimi-k2.7-code"), "kimi");
+	assert.equal(providerForModel("anthropic", "claude-opus-4-6"), "claude");
+	assert.equal(providerForModel("xai", "grok-4"), "grok");
+	assert.equal(providerForModel("cliproxyapi", "deepseek-v4-pro"), undefined);
+});
+
+test("accountsForModel shows only accounts matching the active model", () => {
+	const items: AccountUsage[] = [
+		{ provider: "codex", label: "gpt", windows: [] },
+		{ provider: "kimi", label: "kimi", windows: [] },
+		{ provider: "claude", label: "claude", windows: [] },
+	];
+	assert.deepEqual(
+		accountsForModel(items, "cliproxyapi", "gpt-5.6-sol").map(
+			(item) => item.label,
+		),
+		["gpt"],
+	);
+	assert.deepEqual(
+		accountsForModel(items, "cliproxyapi", "kimi-k3").map(
+			(item) => item.label,
+		),
+		["kimi"],
+	);
+	assert.deepEqual(
+		accountsForModel(items, "cliproxyapi", "mimo-v2.5-pro"),
+		[],
+	);
 });

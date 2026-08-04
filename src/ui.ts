@@ -10,6 +10,7 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
 	claude: "Claude",
 	codex: "Codex",
 	grok: "Grok",
+	kimi: "Kimi",
 };
 const CLAUDE_ORANGE = "\u001b[38;5;208m";
 
@@ -17,10 +18,31 @@ function accountLabel(label: string): string {
 	return label;
 }
 
-export function usageBar(used: number, width = 10): string {
-	const percent = Math.max(0, Math.min(100, used));
-	const filled = Math.round((percent / 100) * width);
+/** Remaining quota in percent, clamped to 0-100. */
+export function remainingPercent(window: UsageWindow): number {
+	return Math.max(0, Math.min(100, 100 - window.used));
+}
+
+/** Color by remaining quota: green normally, yellow below 30%, red below 10%. */
+export function remainingColor(remaining: number): string {
+	if (remaining < 10) return "error";
+	if (remaining < 30) return "warning";
+	return "success";
+}
+
+export function usageBar(percent: number, width = 8): string {
+	const value = Math.max(0, Math.min(100, percent));
+	const filled = Math.round((value / 100) * width);
 	return "━".repeat(filled) + "─".repeat(width - filled);
+}
+
+function formatWindow(window: UsageWindow): string {
+	const remaining = remainingPercent(window);
+	return `${window.label} ${usageBar(remaining)} left ${Math.round(remaining)}%`;
+}
+
+function maxUsed(item: AccountUsage): number {
+	return Math.max(-1, ...item.windows.map((window) => window.used));
 }
 
 export function formatCompact(items: AccountUsage[]): string {
@@ -29,12 +51,7 @@ export function formatCompact(items: AccountUsage[]): string {
 			if (item.error) {
 				return `${PROVIDER_LABELS[item.provider]} ${accountLabel(item.label)}: ! ${item.error}`;
 			}
-			const windows = [
-				item.session &&
-					`S ${usageBar(item.session.used)} ${Math.round(item.session.used)}%`,
-				item.weekly &&
-					`W ${usageBar(item.weekly.used)} ${Math.round(item.weekly.used)}%`,
-			].filter(Boolean);
+			const windows = item.windows.map(formatWindow);
 			return `${PROVIDER_LABELS[item.provider]} ${accountLabel(item.label)}  ${windows.join("  ") || "–"}`;
 		})
 		.join("\n");
@@ -45,10 +62,7 @@ export function formatDetails(items: AccountUsage[]): string {
 	return items
 		.map((item) => {
 			if (item.error) return `${item.provider}/${item.label}: ${item.error}`;
-			const windows = [
-				item.session && `Session ${item.session.used.toFixed(0)}% used`,
-				item.weekly && `Weekly ${item.weekly.used.toFixed(0)}% used`,
-			].filter(Boolean);
+			const windows = item.windows.map(formatWindow);
 			return `${item.provider}/${item.label}: ${windows.join(" · ") || "No usage window"}`;
 		})
 		.join("\n");
@@ -94,9 +108,7 @@ export function renderUsage(
 		.map((item, index) => ({
 			item,
 			index,
-			priority: item.error
-				? Number.POSITIVE_INFINITY
-				: Math.max(item.session?.used ?? -1, item.weekly?.used ?? -1),
+			priority: item.error ? Number.POSITIVE_INFINITY : maxUsed(item),
 		}))
 		.sort(
 			(left, right) =>
@@ -135,22 +147,23 @@ export function renderUsage(
 							width,
 						);
 					}
-					const meter = (name: string, usage: UsageWindow) => {
-						const used = Math.max(0, Math.min(100, usage.used));
-						const color =
-							used >= 90 ? "error" : used >= 70 ? "warning" : "text";
-						const filled = usageBar(used).replace(/─+$/, "");
-						const empty = "─".repeat(10 - filled.length);
-						return `${theme.fg("muted", name)} ${theme.fg(color, filled)}${theme.fg("dim", empty)} ${theme.fg(color, `${Math.round(used)}%`)}`;
+					const meter = (window: UsageWindow) => {
+						const remaining = remainingPercent(window);
+						const color = remainingColor(remaining);
+						const bar = usageBar(remaining);
+						const filled = bar.match(/^━*/)?.[0] ?? "";
+						const empty = bar.slice(filled.length);
+						return [
+							theme.fg("muted", window.label),
+							`${theme.fg(color, filled)}${theme.fg("dim", empty)}`,
+							theme.fg(color, `left ${Math.round(remaining)}%`),
+						].join(" ");
 					};
-					const windows = [
-						item.session && meter("S", item.session),
-						item.weekly && meter("W", item.weekly),
-					].filter(Boolean);
-					return truncateAnsi(
-						`${prefix}${windows.join(theme.fg("dim", "  │  "))}`,
-						width,
-					);
+					const windows = item.windows.map(meter);
+					const content = windows.length
+						? windows.join(theme.fg("dim", "  │  "))
+						: theme.fg("dim", "–");
+					return truncateAnsi(`${prefix}${content}`, width);
 				});
 				if (hiddenCount) {
 					lines.push(

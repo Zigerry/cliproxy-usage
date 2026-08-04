@@ -1,4 +1,4 @@
-export type ProviderName = "claude" | "codex" | "grok";
+export type ProviderName = "claude" | "codex" | "grok" | "kimi";
 
 export type Settings = {
 	accountsDir: string;
@@ -10,6 +10,9 @@ export type Settings = {
 export type Config = Settings;
 
 export type UsageWindow = {
+	/** Short window name shown in the widget, e.g. "5h", "7d", "Plan". */
+	label: string;
+	/** Percentage consumed, 0-100. */
 	used: number;
 	resetsAt?: Date;
 };
@@ -17,8 +20,7 @@ export type UsageWindow = {
 export type AccountUsage = {
 	provider: ProviderName;
 	label: string;
-	session?: UsageWindow;
-	weekly?: UsageWindow;
+	windows: UsageWindow[];
 	error?: string;
 };
 

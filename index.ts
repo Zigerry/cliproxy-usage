@@ -7,9 +7,9 @@ import {
 import { join } from "node:path";
 import { loadSettings } from "./src/settings.js";
 import { showSettings } from "./src/settings-ui.js";
-import { readAccounts } from "./src/usage.js";
+import { accountsForModel, readAccounts } from "./src/usage.js";
 import { clearUsage, formatDetails, renderUsage } from "./src/ui.js";
-import type { Settings } from "./src/types.js";
+import type { AccountUsage, Settings } from "./src/types.js";
 
 const commands = ["settings", "status", "help", "config"];
 const SETTINGS_PATH = join(getAgentDir(), "pi-cliproxy-usage.json");
@@ -23,6 +23,20 @@ const LEGACY_SETTINGS_PATH = join(
 export default function (pi: ExtensionAPI) {
 	let timer: ReturnType<typeof setInterval> | undefined;
 	let refreshing: Promise<void> | undefined;
+	let latestItems: AccountUsage[] = [];
+	let maxVisibleAccounts = 4;
+
+	const itemsForCurrentModel = (
+		ctx: ExtensionContext,
+		items = latestItems,
+	): AccountUsage[] => {
+		if (!ctx.model) return [];
+		return accountsForModel(items, ctx.model.provider, ctx.model.id);
+	};
+
+	const renderCurrentModel = (ctx: ExtensionContext) => {
+		renderUsage(ctx, itemsForCurrentModel(ctx), maxVisibleAccounts);
+	};
 
 	const refresh = (ctx: ExtensionContext, notify = false) =>
 		(refreshing ??= (async () => {
@@ -30,11 +44,15 @@ export default function (pi: ExtensionAPI) {
 			if (loaded.warnings.length && ctx.hasUI) {
 				ctx.ui.notify(loaded.warnings.join("; "), "warning");
 			}
-			const items = await readAccounts(loaded.settings);
-			renderUsage(ctx, items, loaded.settings.maxVisibleAccounts);
+			latestItems = await readAccounts(loaded.settings);
+			maxVisibleAccounts = loaded.settings.maxVisibleAccounts;
+			const items = itemsForCurrentModel(ctx);
+			renderUsage(ctx, items, maxVisibleAccounts);
 			if (notify) {
 				ctx.ui.notify(
-					formatDetails(items),
+					items.length
+						? formatDetails(items)
+						: "No CLIProxyAPI usage matches the current model.",
 					items.some((item) => item.error) ? "warning" : "info",
 				);
 			}
@@ -54,13 +72,13 @@ export default function (pi: ExtensionAPI) {
 		changedId: string,
 	) => {
 		scheduleRefresh(ctx, settings.refreshMinutes);
-		// Only refetch when something that affects the fetched data changed.
-		// Interval/display-only changes (refreshMinutes, maxVisibleAccounts) must
-		// not trigger a request, or every settings tweak burns an API call and
-		// risks rate limiting.
-		if (changedId === "refreshMinutes" || changedId === "maxVisibleAccounts") {
+		// Display-only changes rerender cached data without another provider call.
+		if (changedId === "maxVisibleAccounts") {
+			maxVisibleAccounts = settings.maxVisibleAccounts;
+			renderCurrentModel(ctx);
 			return;
 		}
+		if (changedId === "refreshMinutes") return;
 		await refresh(ctx);
 	};
 
@@ -92,14 +110,23 @@ export default function (pi: ExtensionAPI) {
 		scheduleRefresh(ctx, loaded.settings.refreshMinutes);
 	});
 
+	pi.on("model_select", (event, ctx) => {
+		renderUsage(
+			ctx,
+			accountsForModel(latestItems, event.model.provider, event.model.id),
+			maxVisibleAccounts,
+		);
+	});
+
 	pi.on("session_shutdown", (_event, ctx) => {
 		if (timer) clearInterval(timer);
 		timer = undefined;
+		latestItems = [];
 		clearUsage(ctx);
 	});
 
 	pi.registerCommand("cliproxy-usage", {
-		description: "Refresh usage or manage extension settings",
+		description: "Show current-model quota or manage extension settings",
 		getArgumentCompletions: (prefix) => {
 			const value = prefix.trim().toLowerCase();
 			const matches = commands
@@ -122,7 +149,7 @@ export default function (pi: ExtensionAPI) {
 			if (action === "help") {
 				ctx.ui.notify(
 					[
-						"/cliproxy-usage — refresh usage",
+						"/cliproxy-usage — refresh current-model quota",
 						"/cliproxy-usage settings — edit settings",
 						"/cliproxy-usage status — show effective settings",
 						"/cliproxy-usage help — show this help",
