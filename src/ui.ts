@@ -10,6 +10,7 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
 	claude: "Claude",
 	codex: "Codex",
 	grok: "Grok",
+	kimi: "Kimi",
 };
 const CLAUDE_ORANGE = "\u001b[38;5;208m";
 
@@ -17,10 +18,31 @@ function accountLabel(label: string): string {
 	return label;
 }
 
-export function usageBar(used: number, width = 10): string {
-	const percent = Math.max(0, Math.min(100, used));
-	const filled = Math.round((percent / 100) * width);
+/** Remaining quota in percent, clamped to 0-100. */
+export function remainingPercent(window: UsageWindow): number {
+	return Math.max(0, Math.min(100, 100 - window.used));
+}
+
+/** Color by remaining quota: green normally, yellow below 30%, red below 10%. */
+export function remainingColor(remaining: number): string {
+	if (remaining < 10) return "error";
+	if (remaining < 30) return "warning";
+	return "success";
+}
+
+export function usageBar(percent: number, width = 8): string {
+	const value = Math.max(0, Math.min(100, percent));
+	const filled = Math.round((value / 100) * width);
 	return "━".repeat(filled) + "─".repeat(width - filled);
+}
+
+function formatWindow(window: UsageWindow): string {
+	const remaining = remainingPercent(window);
+	return `${window.label} ${usageBar(remaining)} left ${Math.round(remaining)}%`;
+}
+
+function maxUsed(item: AccountUsage): number {
+	return Math.max(-1, ...item.windows.map((window) => window.used));
 }
 
 export function formatCompact(items: AccountUsage[]): string {
@@ -29,12 +51,7 @@ export function formatCompact(items: AccountUsage[]): string {
 			if (item.error) {
 				return `${PROVIDER_LABELS[item.provider]} ${accountLabel(item.label)}: ! ${item.error}`;
 			}
-			const windows = [
-				item.session &&
-					`S ${usageBar(item.session.used)} ${Math.round(item.session.used)}%`,
-				item.weekly &&
-					`W ${usageBar(item.weekly.used)} ${Math.round(item.weekly.used)}%`,
-			].filter(Boolean);
+			const windows = item.windows.map(formatWindow);
 			return `${PROVIDER_LABELS[item.provider]} ${accountLabel(item.label)}  ${windows.join("  ") || "–"}`;
 		})
 		.join("\n");
@@ -45,10 +62,7 @@ export function formatDetails(items: AccountUsage[]): string {
 	return items
 		.map((item) => {
 			if (item.error) return `${item.provider}/${item.label}: ${item.error}`;
-			const windows = [
-				item.session && `Session ${item.session.used.toFixed(0)}% used`,
-				item.weekly && `Weekly ${item.weekly.used.toFixed(0)}% used`,
-			].filter(Boolean);
+			const windows = item.windows.map(formatWindow);
 			return `${item.provider}/${item.label}: ${windows.join(" · ") || "No usage window"}`;
 		})
 		.join("\n");
@@ -75,6 +89,19 @@ function truncateAnsi(text: string, width: number): string {
 	return `${result}\u001b[0m`;
 }
 
+function ansiWidth(text: string): number {
+	return Array.from(
+		text.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, ""),
+	).length;
+}
+
+function fitPlain(text: string, width: number): string {
+	const points = Array.from(text);
+	if (points.length <= width) return text;
+	if (width <= 1) return "…".slice(0, width);
+	return `${points.slice(0, width - 1).join("")}…`;
+}
+
 export function clearUsage(ctx: UiContext): void {
 	ctx.ui.setStatus("cliproxy-usage", undefined);
 	ctx.ui.setWidget("cliproxy-usage", undefined);
@@ -94,9 +121,7 @@ export function renderUsage(
 		.map((item, index) => ({
 			item,
 			index,
-			priority: item.error
-				? Number.POSITIVE_INFINITY
-				: Math.max(item.session?.used ?? -1, item.weekly?.used ?? -1),
+			priority: item.error ? Number.POSITIVE_INFINITY : maxUsed(item),
 		}))
 		.sort(
 			(left, right) =>
@@ -105,53 +130,111 @@ export function renderUsage(
 		.slice(0, maxVisibleAccounts)
 		.map(({ item }) => item);
 	const hiddenCount = items.length - visibleItems.length;
-	const providerWidth = Math.max(
-		...visibleItems.map((item) => PROVIDER_LABELS[item.provider].length),
-	);
-	const accountWidth = Math.max(
-		...visibleItems.map((item) => accountLabel(item.label).length),
-	);
 	ctx.ui.setWidget(
 		"cliproxy-usage",
 		(_tui: unknown, theme: Theme) => ({
 			invalidate() {},
 			render(width: number): string[] {
-				const lines = visibleItems.map((item) => {
-					const providerText =
-						PROVIDER_LABELS[item.provider].padEnd(providerWidth);
-					const providerLabel =
-						item.provider === "claude"
-							? `${CLAUDE_ORANGE}${providerText}\u001b[0m`
-							: theme.fg("text", providerText);
-					const separator = theme.fg("dim", " │ ");
-					const prefix =
-						providerLabel +
-						separator +
-						theme.fg("muted", accountLabel(item.label).padEnd(accountWidth)) +
-						separator;
-					if (item.error) {
-						return truncateAnsi(
-							`${prefix}${theme.fg("error", `! ${item.error}`)}`,
-							width,
+				const gap = 4;
+				const providers = new Set(visibleItems.map((item) => item.provider));
+				const groupedProvider =
+					providers.size === 1 && visibleItems.length > 1
+						? visibleItems[0]?.provider
+						: undefined;
+				const styledProvider = (provider: ProviderName, text: string) =>
+					provider === "claude"
+						? `${CLAUDE_ORANGE}${text}\u001b[0m`
+						: theme.fg("text", text);
+				const labelLimit = visibleItems.length > 1 ? 18 : 24;
+				const buildCards = (barWidth: number, styled: boolean) =>
+					visibleItems.map((item) => {
+						const paint = (color: string, text: string) =>
+							styled ? theme.fg(color, text) : text;
+						const separator = paint("dim", " │ ");
+						const account = paint(
+							"muted",
+							fitPlain(accountLabel(item.label), labelLimit),
 						);
+						const provider = styled
+							? styledProvider(item.provider, PROVIDER_LABELS[item.provider])
+							: PROVIDER_LABELS[item.provider];
+						const prefix = groupedProvider
+							? account + separator
+							: provider + separator + account + separator;
+						let content: string;
+						if (item.error) {
+							content = paint("error", `! ${item.error}`);
+						} else {
+							const meters = item.windows.map((window) => {
+								const remaining = remainingPercent(window);
+								const color = remainingColor(remaining);
+								const bar = usageBar(remaining, barWidth);
+								const filled = bar.match(/^━*/)?.[0] ?? "";
+								const empty = bar.slice(filled.length);
+								return [
+									paint("muted", window.label),
+									`${paint(color, filled)}${paint("dim", empty)}`,
+									paint(color, `left ${Math.round(remaining)}%`),
+								].join(" ");
+							});
+							content = meters.length
+								? meters.join(paint("dim", " │ "))
+								: paint("dim", "–");
+						}
+						const card = `${prefix}${content}`;
+						return truncateAnsi(card, Math.min(width, ansiWidth(card)));
+					});
+				const packCards = (cards: string[]): string[][] => {
+					const rows: string[][] = [];
+					let row: string[] = [];
+					let rowWidth = 0;
+					for (const card of cards) {
+						const cardWidth = ansiWidth(card);
+						const nextWidth =
+							rowWidth + (row.length ? gap : 0) + cardWidth;
+						if (row.length && (row.length >= 3 || nextWidth > width)) {
+							rows.push(row);
+							row = [];
+							rowWidth = 0;
+						}
+						rowWidth += (row.length ? gap : 0) + cardWidth;
+						row.push(card);
 					}
-					const meter = (name: string, usage: UsageWindow) => {
-						const used = Math.max(0, Math.min(100, usage.used));
-						const color =
-							used >= 90 ? "error" : used >= 70 ? "warning" : "text";
-						const filled = usageBar(used).replace(/─+$/, "");
-						const empty = "─".repeat(10 - filled.length);
-						return `${theme.fg("muted", name)} ${theme.fg(color, filled)}${theme.fg("dim", empty)} ${theme.fg(color, `${Math.round(used)}%`)}`;
+					if (row.length) rows.push(row);
+					return rows;
+				};
+				const candidates = [8, 6, 4].map((barWidth) => {
+					const rows = packCards(buildCards(barWidth, false));
+					return {
+						barWidth,
+						rows,
+						maxColumns: Math.max(...rows.map((row) => row.length)),
 					};
-					const windows = [
-						item.session && meter("S", item.session),
-						item.weekly && meter("W", item.weekly),
-					].filter(Boolean);
-					return truncateAnsi(
-						`${prefix}${windows.join(theme.fg("dim", "  │  "))}`,
-						width,
-					);
 				});
+				candidates.sort(
+					(left, right) =>
+						left.rows.length - right.rows.length ||
+						right.maxColumns - left.maxColumns ||
+						right.barWidth - left.barWidth,
+				);
+				const layout = candidates[0];
+				const rows = packCards(buildCards(layout?.barWidth ?? 8, true));
+				const lines: string[] = [];
+				if (groupedProvider) {
+					const count = items.length;
+					lines.push(
+						truncateAnsi(
+							`${styledProvider(groupedProvider, PROVIDER_LABELS[groupedProvider])} ${theme.fg(
+								"dim",
+								`quota · ${count} account${count === 1 ? "" : "s"}`,
+							)}`,
+							width,
+						),
+					);
+				}
+				for (const row of rows) {
+					lines.push(row.join(" ".repeat(gap)));
+				}
 				if (hiddenCount) {
 					lines.push(
 						truncateAnsi(

@@ -6,7 +6,7 @@ export const DEFAULT_SETTINGS: Settings = {
 	accountsDir: "~/.cli-proxy-api",
 	refreshMinutes: 5,
 	maxVisibleAccounts: 4,
-	providers: { claude: true, codex: true, grok: true },
+	providers: { claude: true, codex: true, grok: true, kimi: true },
 };
 
 type JsonObject = Record<string, unknown>;
@@ -57,7 +57,7 @@ export function normalizeSettings(value: unknown): {
 	} else if (value.maxVisibleAccounts !== undefined) {
 		warnings.push("ignored invalid maxVisibleAccounts");
 	}
-	for (const provider of ["claude", "codex", "grok"] as const) {
+	for (const provider of ["claude", "codex", "grok", "kimi"] as const) {
 		if (typeof providers[provider] === "boolean") {
 			settings.providers[provider] = providers[provider];
 		} else if (providers[provider] !== undefined) {

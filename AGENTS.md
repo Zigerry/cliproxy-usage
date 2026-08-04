@@ -7,8 +7,8 @@ Pi extension showing CLIProxyAPI account usage. Keep changes small, typed, and d
 ## Architecture
 
 - `index.ts`: Pi lifecycle and command wiring only.
-- `src/config.ts`: persisted configuration.
-- `src/config-ui.ts`: interactive TUI configuration.
+- `src/settings.ts`: persisted configuration.
+- `src/settings-ui.ts`: interactive TUI configuration.
 - `src/usage.ts`: account discovery and provider HTTP requests.
 - `src/parsers.ts`: pure provider response parsing.
 - `src/ui.ts`: formatting and widget rendering.
@@ -63,5 +63,8 @@ Use `!` and a `BREAKING CHANGE:` footer only for actual breaking changes.
 
 - Credentials must stay local and only go to official provider endpoints.
 - Never log or expose access/refresh tokens.
-- Configuration path: `~/.pi/agent/extensions/pi-cliproxy-usage/config.json`.
+- Configuration path: `~/.pi/agent/pi-cliproxy-usage.json` (legacy extension config migrates automatically).
 - Keep `/cliproxy-usage` as command entry point; use subcommands for additional actions.
+- Keep provider quota windows explicit (`7d`, `5h`, etc.); never infer a session from Codex primary/secondary slot position.
+- Widget quota bars and colors represent remaining quota, not consumed quota.
+- Scope the widget to the active Pi model's matching OAuth account provider.

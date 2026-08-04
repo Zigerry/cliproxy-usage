@@ -1,41 +1,82 @@
 # pi-cliproxy-usage
 
-Compact CLIProxyAPI account usage meters for Pi Coding Agent.
+CLIProxyAPI OAuth account quota widget for Pi Coding Agent.
 
-Shows one colored line below editor per enabled account:
+The widget follows Pi's active model and shows only matching account quotas:
 
 ```text
-● Claude │ user │ S ━━━━━━━─── 70%  │  W ━━━━────── 40%
-● Codex  │ user │ S ━━━━━━━━━─ 90%
-● Grok   │ user │ W ━━━━━───── 50%
+Codex │ user │ 7d ━━━━━━── left 69%
+Kimi  │ user │ 7d ━━━━──── left 50% │ 5h ━━━━━━━━ left 95%
 ```
 
-Percentages and filled bars show usage **consumed**. Colors shift green → yellow at 70% → red at 90%. Codex intentionally shows Session only; weekly meter is omitted.
+Multiple matching accounts use a content-aware compact layout. Cards keep their natural width and are packed left-to-right with a fixed gap, up to three per row. The renderer prioritizes fewer rows, then uses the longest progress bar that still fits. Codex cards often fit three per row because they only contain `7d`; wider Kimi cards naturally fit fewer. The provider appears once as a compact group heading and long account labels are truncated:
+
+```text
+Codex quota · 3 accounts
+work-a… │ 7d ━━━━━─ left 85%    work-b… │ 7d ━━━━── left 68%
+work-c… │ 7d ━━━━━━ left 96%
+```
+
+Quota windows always use the same order: **7d first, 5h second**. A window is omitted when the provider does not return it. In particular, Codex accounts that expose only a 7-day window no longer show it as a session window.
+
+Bars and percentages represent quota **remaining**:
+
+- 30% or more: green
+- below 30%: yellow
+- below 10%: red
+
+## Supported accounts
+
+- Claude (`type: "claude"`): 7d and 5h windows
+- Codex (`type: "codex"`): 7d and/or 5h windows returned by the account plan
+- Grok (`type: "xai"`): 7d unified billing window
+- Kimi Code (`type: "kimi"`): 7d subscription and 5h rate-limit windows
+
+The active model id selects the account type shown by the widget:
+
+- `gpt-*` or `codex-*` → Codex
+- `kimi-*` or `moonshot-*` → Kimi
+- `claude-*` → Claude
+- `grok-*` or `xai-*` → Grok
+
+Other model families hide the widget because there is no matching OAuth quota source.
 
 ## Requirements
 
 - [Pi Coding Agent](https://github.com/earendil-works/pi)
-- [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) with at least one Claude, Codex, or Grok account configured
+- [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) with at least one supported OAuth account configured
 
 ## Install
 
+From this repository:
+
 ```bash
-pi install npm:pi-cliproxy-usage
+pi install https://github.com/Zigerry/pi-cliproxyapi-oauth-usage.git
+```
+
+Or install a local development checkout:
+
+```bash
+pi install /absolute/path/to/pi-cliproxyapi-oauth-usage
 ```
 
 After installing or updating, run `/reload` in Pi.
 
-Or test directly:
+To test only the local extension while an older npm package is still installed:
 
 ```bash
-pi -e ./index.ts
+pi --no-extensions -e ./index.ts
 ```
 
 ## Settings
 
-User file: `<getAgentDir()>/pi-cliproxy-usage.json` (normally `~/.pi/agent/pi-cliproxy-usage.json`). Missing file uses defaults. Changes from interactive UI apply immediately. Settings reload on session start and `/reload`.
+User file: `<getAgentDir()>/pi-cliproxy-usage.json`, normally:
 
-Older `~/.pi/agent/extensions/pi-cliproxy-usage/config.json` files migrate automatically when canonical file does not exist.
+```text
+~/.pi/agent/pi-cliproxy-usage.json
+```
+
+Missing files use defaults. Changes from the interactive settings UI apply immediately. Older `~/.pi/agent/extensions/pi-cliproxy-usage/config.json` files migrate automatically when the canonical file does not exist.
 
 ```json
 {
@@ -45,29 +86,35 @@ Older `~/.pi/agent/extensions/pi-cliproxy-usage/config.json` files migrate autom
   "providers": {
     "claude": true,
     "codex": true,
-    "grok": true
+    "grok": true,
+    "kimi": true
   }
 }
 ```
 
-Extension reads top-level CLIProxyAPI auth JSON files with `type` equal to `claude`, `codex`, or `xai`. Disabled auth files are skipped. Credentials stay local and are sent only to official provider usage endpoints documented by OpenUsage.
+Credentials stay local and are sent only to official provider quota endpoints. Token refresh remains CLIProxyAPI's responsibility; the extension rereads account files on every refresh so it uses tokens written back by CLIProxyAPI.
 
-Accepted values: `accountsDir` is a non-empty string; `refreshMinutes` and `maxVisibleAccounts` are integers of at least `1`; provider values are booleans. Widget prioritizes errors, then accounts with highest usage, and shows an overflow row when more accounts exist. Invalid values are ignored with a warning. Unknown fields are preserved when saving.
+The widget prioritizes errors, then accounts with the least remaining quota, and shows an overflow row when more accounts exist. Invalid setting values are ignored with a warning. Unknown fields are preserved when saving.
 
 ## Commands
 
-- `/cliproxy-usage` — refresh and show detailed percentages
-- `/cliproxy-usage settings` — interactively edit refresh interval and provider toggles
-- `/cliproxy-usage status` — show effective values, source, and settings path
-- `/cliproxy-usage help` — show commands and manual settings path
+- `/cliproxy-usage` — refresh and show quota for the current model
+- `/cliproxy-usage settings` — interactively edit settings and provider toggles
+- `/cliproxy-usage status` — show effective settings and settings path
+- `/cliproxy-usage help` — show command help
 - `/cliproxy-usage config` — compatibility alias for `settings`
 
-Token refresh is deliberately left to CLIProxyAPI. If provider returns `401`/`403`, let CLIProxyAPI refresh account or log in again.
+If a provider returns `401` or `403`, let CLIProxyAPI refresh the account or log in again.
 
-## Screenshot
+## Development
 
-![CLIProxyAPI usage widget](https://raw.githubusercontent.com/Villoh/pi-cliproxy-usage/main/assets/preview.png)
+```bash
+npm install
+npm test
+npm run check
+npm pack --dry-run
+```
 
 ## Support
 
-Report bugs and request features in [GitHub Issues](https://github.com/Villoh/pi-cliproxy-usage/issues).
+Report bugs and request features at [Zigerry/pi-cliproxyapi-oauth-usage](https://github.com/Zigerry/pi-cliproxyapi-oauth-usage/issues).

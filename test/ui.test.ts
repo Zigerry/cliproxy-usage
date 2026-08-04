@@ -3,39 +3,59 @@ import test from "node:test";
 import {
 	formatCompact,
 	formatDetails,
+	remainingColor,
+	remainingPercent,
 	renderUsage,
 	usageBar,
 } from "../src/ui.js";
-import type { Theme, UiContext } from "../src/types.js";
+import type { Theme, UiContext, UsageWindow } from "../src/types.js";
 
-test("usageBar clamps usage and supports custom widths", () => {
-	assert.equal(usageBar(-10), "──────────");
-	assert.equal(usageBar(0), "──────────");
-	assert.equal(usageBar(25), "━━━───────");
+test("usageBar renders remaining quota with an eight-cell default", () => {
+	assert.equal(usageBar(-10), "────────");
+	assert.equal(usageBar(0), "────────");
+	assert.equal(usageBar(25), "━━──────");
 	assert.equal(usageBar(50, 4), "━━──");
-	assert.equal(usageBar(100), "━━━━━━━━━━");
-	assert.equal(usageBar(150), "━━━━━━━━━━");
+	assert.equal(usageBar(100), "━━━━━━━━");
+	assert.equal(usageBar(150), "━━━━━━━━");
 });
 
-test("formatCompact renders full account labels and separates accounts", () => {
+test("remaining quota and color thresholds follow the configured semantics", () => {
+	const window = (used: number): UsageWindow => ({ label: "7d", used });
+	assert.equal(remainingPercent(window(-10)), 100);
+	assert.equal(remainingPercent(window(31)), 69);
+	assert.equal(remainingPercent(window(150)), 0);
+	assert.equal(remainingColor(100), "success");
+	assert.equal(remainingColor(30), "success");
+	assert.equal(remainingColor(29), "warning");
+	assert.equal(remainingColor(10), "warning");
+	assert.equal(remainingColor(9), "error");
+});
+
+test("formatCompact renders explicit window names, bars, and remaining quota", () => {
 	assert.equal(
 		formatCompact([
 			{
-				provider: "claude",
-				label: "very-long-account-name@example.com",
-				session: { used: 49.6 },
-				weekly: { used: 100 },
+				provider: "kimi",
+				label: "work",
+				windows: [
+					{ label: "7d", used: 50 },
+					{ label: "5h", used: 5 },
+				],
 			},
-			{ provider: "codex", label: "work", session: { used: 0 } },
+			{
+				provider: "codex",
+				label: "plus",
+				windows: [{ label: "7d", used: 31 }],
+			},
 		]),
 		[
-			"Claude very-long-account-name@example.com  S ━━━━━───── 50%  W ━━━━━━━━━━ 100%",
-			"Codex work  S ────────── 0%",
+			"Kimi work  7d ━━━━──── left 50%  5h ━━━━━━━━ left 95%",
+			"Codex plus  7d ━━━━━━── left 69%",
 		].join("\n"),
 	);
 });
 
-test("renderUsage colors Claude orange and Codex/Grok white", () => {
+function createContext() {
 	let widget: unknown;
 	const colors: string[] = [];
 	const theme: Theme = {
@@ -57,117 +77,142 @@ test("renderUsage colors Claude orange and Codex/Grok white", () => {
 			input: async () => undefined,
 		},
 	} satisfies UiContext;
+	return {
+		ctx,
+		theme,
+		colors,
+		render(width = 120): string[] {
+			const factory = widget as (
+				tui: unknown,
+				theme: Theme,
+			) => { render(width: number): string[] };
+			return factory(undefined, theme).render(width);
+		},
+	};
+}
 
+test("renderUsage keeps seven-day before five-hour and colors remaining quota", () => {
+	const { ctx, colors, render } = createContext();
+	renderUsage(
+		ctx,
+		[
+			{
+				provider: "kimi",
+				label: "account",
+				windows: [
+					{ label: "7d", used: 50 },
+					{ label: "5h", used: 5 },
+				],
+			},
+		],
+		4,
+	);
+	assert.equal(
+		render()[0],
+		"Kimi │ account │ 7d ━━━━──── left 50% │ 5h ━━━━━━━━ left 95%\u001b[0m",
+	);
+	assert.equal(colors.filter((color) => color === "success").length, 4);
+});
+
+test("renderUsage uses yellow below 30% left and red below 10% left", () => {
+	const { ctx, colors, render } = createContext();
+	renderUsage(
+		ctx,
+		[
+			{
+				provider: "codex",
+				label: "work",
+				windows: [
+					{ label: "7d", used: 71 },
+					{ label: "5h", used: 91 },
+				],
+			},
+		],
+		4,
+	);
+	render();
+	assert.equal(colors.filter((color) => color === "warning").length, 2);
+	assert.equal(colors.filter((color) => color === "error").length, 2);
+});
+
+test("renderUsage packs two cards into one row when width allows", () => {
+	const { ctx, render } = createContext();
 	renderUsage(
 		ctx,
 		[
 			{
 				provider: "claude",
-				label: "user@example.com",
-				session: { used: 50 },
+				label: "a",
+				windows: [{ label: "7d", used: 50 }],
+			},
+			{
+				provider: "codex",
+				label: "long",
+				windows: [{ label: "7d", used: 31 }],
 			},
 		],
 		4,
 	);
-	const factory = widget as (
-		tui: unknown,
-		theme: Theme,
-	) => { render(width: number): string[] };
-	assert.equal(
-		factory(undefined, theme).render(100)[0],
-		"\u001b[38;5;208mClaude\u001b[0m │ user@example.com │ S ━━━━━───── 50%\u001b[0m",
-	);
-	assert.equal(colors.filter((color) => color === "text").length, 2);
-
-	colors.length = 0;
-	renderUsage(
-		ctx,
-		[
-			{ provider: "codex", label: "work" },
-			{ provider: "grok", label: "team" },
-		],
-		4,
-	);
-	(
-		widget as (
-			tui: unknown,
-			theme: Theme,
-		) => { render(width: number): string[] }
-	)(undefined, theme).render(100);
-	assert.equal(colors.filter((color) => color === "text").length, 2);
+	const lines = render(120);
+	assert.equal(lines.length, 1);
+	assert.match(lines[0] ?? "", /Claude/);
+	assert.match(lines[0] ?? "", /Codex/);
+	assert.match(lines[0] ?? "", /7d ━━━━──── left 50%/);
+	assert.match(lines[0] ?? "", /7d ━━━━━━── left 69%/);
 });
 
-test("renderUsage aligns separators across providers and accounts", () => {
-	let widget: unknown;
-	const theme: Theme = { fg: (_color, text) => text };
-	const ctx = {
-		mode: "interactive",
-		ui: {
-			theme,
-			setStatus() {},
-			setWidget: (_id, content) => {
-				widget = content;
-			},
-			notify() {},
-			select: async () => undefined,
-			input: async () => undefined,
-		},
-	} satisfies UiContext;
-
+test("renderUsage switches between three, two, and one account columns", () => {
+	const { ctx, render } = createContext();
 	renderUsage(
 		ctx,
-		[
-			{ provider: "claude", label: "a", session: { used: 50 } },
-			{ provider: "codex", label: "long", session: { used: 0 } },
-		],
+		["alpha", "beta", "gamma"].map((label, index) => ({
+			provider: "codex" as const,
+			label,
+			windows: [{ label: "7d", used: 20 + index * 10 }],
+		})),
 		4,
 	);
-	const factory = widget as (
-		tui: unknown,
-		theme: Theme,
-	) => { render(width: number): string[] };
-	assert.deepEqual(factory(undefined, theme).render(100), [
-		"\u001b[38;5;208mClaude\u001b[0m │ a    │ S ━━━━━───── 50%\u001b[0m",
-		"Codex  │ long │ S ────────── 0%\u001b[0m",
-	]);
+	const wide = render(180);
+	assert.equal(wide.length, 2);
+	assert.match(wide[0] ?? "", /Codex quota · 3 accounts/);
+	assert.match(wide[1] ?? "", /alpha/);
+	assert.match(wide[1] ?? "", /beta/);
+	assert.match(wide[1] ?? "", /gamma/);
+
+	const medium = render(70);
+	assert.equal(medium.length, 3);
+	assert.match(medium[1] ?? "", /gamma.*beta/);
+	assert.match(medium[2] ?? "", /alpha/);
+
+	const narrow = render(40);
+	assert.equal(narrow.length, 4);
 });
 
 test("renderUsage limits rows and prioritizes errors then highest usage", () => {
-	let widget: unknown;
-	const theme: Theme = { fg: (_color, text) => text };
-	const ctx = {
-		mode: "interactive",
-		ui: {
-			theme,
-			setStatus() {},
-			setWidget: (_id, content) => {
-				widget = content;
-			},
-			notify() {},
-			select: async () => undefined,
-			input: async () => undefined,
-		},
-	} satisfies UiContext;
-
+	const { ctx, render } = createContext();
 	renderUsage(
 		ctx,
 		[
-			{ provider: "claude", label: "low", session: { used: 10 } },
-			{ provider: "codex", label: "high", session: { used: 90 } },
-			{ provider: "grok", label: "broken", error: "HTTP 401" },
+			{
+				provider: "claude",
+				label: "low",
+				windows: [{ label: "7d", used: 10 }],
+			},
+			{
+				provider: "codex",
+				label: "high",
+				windows: [{ label: "7d", used: 90 }],
+			},
+			{ provider: "grok", label: "broken", windows: [], error: "HTTP 401" },
 		],
 		2,
 	);
-	const factory = widget as (
-		tui: unknown,
-		theme: Theme,
-	) => { render(width: number): string[] };
-	const lines = factory(undefined, theme).render(100);
-	assert.equal(lines.length, 3);
+	const lines = render();
+	assert.equal(lines.length, 2);
 	assert.match(lines[0] ?? "", /broken/);
-	assert.match(lines[1] ?? "", /high/);
+	assert.match(lines[0] ?? "", /high/);
 	assert.equal(
-		lines[2],
+		lines[1],
 		"… 1 more account · /cliproxy-usage for details\u001b[0m",
 	);
 });
@@ -175,8 +220,8 @@ test("renderUsage limits rows and prioritizes errors then highest usage", () => 
 test("formatCompact handles errors and missing windows", () => {
 	assert.equal(
 		formatCompact([
-			{ provider: "grok", label: "x", error: "HTTP 401" },
-			{ provider: "codex", label: "empty" },
+			{ provider: "grok", label: "x", windows: [], error: "HTTP 401" },
+			{ provider: "codex", label: "empty", windows: [] },
 		]),
 		"Grok x: ! HTTP 401\nCodex empty  –",
 	);
@@ -187,16 +232,18 @@ test("formatDetails handles empty, success, errors, and missing data", () => {
 	assert.equal(
 		formatDetails([
 			{
-				provider: "claude",
+				provider: "kimi",
 				label: "me",
-				session: { used: 12.6 },
-				weekly: { used: 44.4 },
+				windows: [
+					{ label: "7d", used: 50 },
+					{ label: "5h", used: 5 },
+				],
 			},
-			{ provider: "grok", label: "bad", error: "HTTP 403" },
-			{ provider: "codex", label: "empty" },
+			{ provider: "grok", label: "bad", windows: [], error: "HTTP 403" },
+			{ provider: "codex", label: "empty", windows: [] },
 		]),
 		[
-			"claude/me: Session 13% used · Weekly 44% used",
+			"kimi/me: 7d ━━━━──── left 50% · 5h ━━━━━━━━ left 95%",
 			"grok/bad: HTTP 403",
 			"codex/empty: No usage window",
 		].join("\n"),

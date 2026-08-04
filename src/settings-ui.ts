@@ -12,7 +12,12 @@ import {
 import { loadSettings, saveSettings } from "./settings.js";
 import type { ProviderName, Settings } from "./types.js";
 
-const providerIds = new Set<ProviderName>(["claude", "codex", "grok"]);
+const providerIds = new Set<ProviderName>([
+	"claude",
+	"codex",
+	"grok",
+	"kimi",
+]);
 
 export async function showSettings(
 	ctx: ExtensionCommandContext,
@@ -67,7 +72,7 @@ export async function showSettings(
 				currentValue: String(settings.maxVisibleAccounts),
 				values: ["1", "2", "3", "4", "5", "10"],
 			},
-			...(["claude", "codex", "grok"] as const).map((provider) => ({
+			...(["claude", "codex", "grok", "kimi"] as const).map((provider) => ({
 				id: provider,
 				label: `${provider[0]?.toUpperCase()}${provider.slice(1)}`,
 				description: `Show ${provider} accounts`,
