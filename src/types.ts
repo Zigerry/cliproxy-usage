@@ -6,8 +6,10 @@ export type ProviderName =
 	| "kimi";
 
 export type Settings = {
-	accountsDir: string;
-	cliproxyConfigPath: string;
+	/** Optional CLIProxyAPI root used instead of the provider's configured base URL. */
+	managementUrl: string;
+	/** Plaintext Management API key, stored only in the mode-0600 settings file. */
+	managementKey: string;
 	refreshMinutes: number;
 	maxVisibleAccounts: number;
 	providers: Record<ProviderName, boolean>;

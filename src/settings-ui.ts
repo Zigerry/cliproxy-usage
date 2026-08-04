@@ -22,6 +22,67 @@ const providerLabels: Record<ProviderName, string> = {
 	kimi: "Kimi",
 };
 
+class PasswordInput extends Input {
+	override render(width: number): string[] {
+		const value = this.getValue();
+		this.setValue("•".repeat(value.length));
+		try {
+			return super.render(width);
+		} finally {
+			this.setValue(value);
+		}
+	}
+}
+
+export async function promptManagementKey(
+	ctx: ExtensionCommandContext,
+	managementUrl: string,
+): Promise<string | undefined> {
+	if (ctx.mode !== "tui") {
+		if (ctx.hasUI) {
+			ctx.ui.notify(
+				"Management setup requires an interactive TUI session.",
+				"warning",
+			);
+		}
+		return undefined;
+	}
+
+	return ctx.ui.custom<string | undefined>((tui, theme, _keybindings, done) => {
+		const container = new Container();
+		container.addChild(
+			new Text(
+				theme.fg("accent", theme.bold("CLIProxyAPI Management Setup")),
+				1,
+				1,
+			),
+		);
+		container.addChild(
+			new Text(
+				`${theme.fg("dim", "Endpoint:")} ${managementUrl}\n${theme.fg("muted", "Enter the password used by management.html")}`,
+				1,
+				0,
+			),
+		);
+		const input = new PasswordInput();
+		input.focused = true;
+		input.onSubmit = (value) => done(value || undefined);
+		input.onEscape = () => done(undefined);
+		container.addChild(input);
+		container.addChild(
+			new Text(theme.fg("dim", "enter save • esc cancel"), 1, 1),
+		);
+		return {
+			render: (width: number) => container.render(width),
+			invalidate: () => container.invalidate(),
+			handleInput(data: string) {
+				input.handleInput(data);
+				tui.requestRender();
+			},
+		};
+	});
+}
+
 export async function showSettings(
 	ctx: ExtensionCommandContext,
 	settingsPath: string,
@@ -49,27 +110,14 @@ export async function showSettings(
 	await ctx.ui.custom((tui, theme, _keybindings, done) => {
 		const items: SettingItem[] = [
 			{
-				id: "accountsDir",
-				label: "Accounts directory",
-				description: "Directory containing CLIProxyAPI account JSON files",
-				currentValue: settings.accountsDir,
-				submenu: (currentValue, close) => {
+				id: "managementUrl",
+				label: "Management URL override",
+				description: "Empty uses the base URL from cliproxyapi.json",
+				currentValue: settings.managementUrl || "automatic",
+				submenu: (_currentValue, close) => {
 					const input = new Input();
-					input.setValue(currentValue);
-					input.onSubmit = (value) => close(value.trim() || undefined);
-					input.onEscape = () => close(undefined);
-					return input;
-				},
-			},
-			{
-				id: "cliproxyConfigPath",
-				label: "CLIProxyAPI config",
-				description: "YAML config containing OpenAI-compatible API keys",
-				currentValue: settings.cliproxyConfigPath,
-				submenu: (currentValue, close) => {
-					const input = new Input();
-					input.setValue(currentValue);
-					input.onSubmit = (value) => close(value.trim() || undefined);
+					input.setValue(settings.managementUrl);
+					input.onSubmit = (value) => close(value.trim() || "automatic");
 					input.onEscape = () => close(undefined);
 					return input;
 				},
@@ -110,8 +158,9 @@ export async function showSettings(
 			getSettingsListTheme(),
 			(id, value) => {
 				const previous = structuredClone(settings);
-				if (id === "accountsDir") settings.accountsDir = value;
-				if (id === "cliproxyConfigPath") settings.cliproxyConfigPath = value;
+				if (id === "managementUrl") {
+					settings.managementUrl = value === "automatic" ? "" : value;
+				}
 				if (id === "refreshMinutes") settings.refreshMinutes = Number(value);
 				if (id === "maxVisibleAccounts") {
 					settings.maxVisibleAccounts = Number(value);
@@ -128,9 +177,8 @@ export async function showSettings(
 					.catch((error) => {
 						settings = previous;
 						let previousValue: string;
-						if (id === "accountsDir") previousValue = previous.accountsDir;
-						else if (id === "cliproxyConfigPath") {
-							previousValue = previous.cliproxyConfigPath;
+						if (id === "managementUrl") {
+							previousValue = previous.managementUrl || "automatic";
 						} else if (id === "refreshMinutes") {
 							previousValue = String(previous.refreshMinutes);
 						} else if (id === "maxVisibleAccounts") {
@@ -153,7 +201,7 @@ export async function showSettings(
 			new Text(
 				theme.fg(
 					"dim",
-					`Accounts directory: ${settings.accountsDir}\nCLIProxyAPI config: ${settings.cliproxyConfigPath}\n${settingsPath}`,
+					`Management URL: ${settings.managementUrl || "automatic"}\nManagement key: ${settings.managementKey ? "configured" : "run /cliproxy-usage setup"}\n${settingsPath}`,
 				),
 				1,
 				1,

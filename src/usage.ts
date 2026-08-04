@@ -1,6 +1,5 @@
-import { readFile, readdir } from "node:fs/promises";
-import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { basename } from "node:path";
 import {
 	parseClaude,
 	parseCodex,
@@ -11,22 +10,40 @@ import {
 } from "./parsers.js";
 import type { AccountUsage, Config, ProviderName } from "./types.js";
 
-type OAuthProviderName = Exclude<ProviderName, "deepseek">;
-
-type AuthFile = {
-	type?: string;
+type RemoteAuthFile = {
+	auth_index?: string;
+	name?: string;
+	provider?: string;
+	label?: string;
 	email?: string;
-	access_token?: string;
+	account_type?: string;
 	account_id?: string;
 	disabled?: boolean;
+	unavailable?: boolean;
+	status?: string;
+	status_message?: string;
 };
 
-const OAUTH_PROVIDERS = new Set<OAuthProviderName>([
-	"claude",
-	"codex",
-	"grok",
-	"kimi",
-]);
+type UsageResponse = { body: unknown; headers: Headers };
+
+type RemoteApiCallResponse = {
+	status_code?: number;
+	header?: Record<string, string | string[]>;
+	body?: unknown;
+};
+
+export type ManagementSource = {
+	providerBaseUrl?: string;
+	managementUrl?: string;
+	managementKeyConfigured: boolean;
+	error?: string;
+};
+
+export type ReadAccountsOptions = {
+	providerConfigPath?: string;
+	onManagementAuthFailure?: () => void;
+};
+
 const USAGE_URLS = {
 	claude: "https://api.anthropic.com/api/oauth/usage",
 	codex: "https://chatgpt.com/backend-api/wham/usage",
@@ -35,130 +52,67 @@ const USAGE_URLS = {
 	kimi: "https://api.kimi.com/coding/v1/usages",
 } as const;
 
-function expandHome(path: string): string {
-	if (path === "~") return homedir();
-	if (path.startsWith("~/") || path.startsWith("~\\")) {
-		return join(homedir(), path.slice(2));
+export class ManagementHttpError extends Error {
+	constructor(
+		public readonly status: number,
+		message = `management HTTP ${status}`,
+	) {
+		super(message);
+		this.name = "ManagementHttpError";
 	}
-	return resolve(path);
 }
 
-function yamlScalar(value: string): string {
-	const trimmed = value.trim();
-	if (trimmed.startsWith('"')) {
-		try {
-			return JSON.parse(trimmed) as string;
-		} catch {
-			return "";
-		}
+function normalizedBaseUrl(value: string): string | undefined {
+	try {
+		const url = new URL(value.trim());
+		url.pathname = url.pathname
+			.replace(/\/+$/, "")
+			.replace(/\/v0\/management$/i, "");
+		url.search = "";
+		url.hash = "";
+		return url.toString().replace(/\/$/, "");
+	} catch {
+		return undefined;
 	}
-	if (trimmed.startsWith("'")) {
-		const end = trimmed.lastIndexOf("'");
-		return end > 0 ? trimmed.slice(1, end).replace(/''/g, "'") : "";
-	}
-	return trimmed.replace(/\s+#.*$/, "").trim();
 }
 
-function yamlField(text: string, field: string): string | undefined {
-	const match = text.match(new RegExp(`^(?:-\\s*)?${field}:\\s*(.*)$`, "i"));
-	return match ? yamlScalar(match[1] ?? "") : undefined;
+async function configuredProviderBaseUrl(
+	providerConfigPath?: string,
+): Promise<string | undefined> {
+	if (!providerConfigPath) return undefined;
+	try {
+		const value = JSON.parse(
+			await readFile(providerConfigPath, "utf8"),
+		) as Record<string, unknown>;
+		return typeof value.baseUrl === "string"
+			? normalizedBaseUrl(value.baseUrl)
+			: undefined;
+	} catch {
+		return undefined;
+	}
 }
 
-/** Extract only API keys explicitly configured for the official DeepSeek host. */
-export function parseDeepSeekApiKeys(yaml: string): string[] {
-	const lines = yaml.split(/\r?\n/).map((raw) => ({
-		indent: raw.length - raw.trimStart().length,
-		text: raw.trim(),
-	}));
-	const sectionIndex = lines.findIndex(
-		(line) => line.text.toLowerCase() === "openai-compatibility:",
-	);
-	if (sectionIndex < 0) return [];
-	const sectionIndent = lines[sectionIndex]?.indent ?? 0;
-	let sectionEnd = lines.length;
-	for (let index = sectionIndex + 1; index < lines.length; index++) {
-		const line = lines[index];
-		if (line?.text && line.indent <= sectionIndent) {
-			sectionEnd = index;
-			break;
-		}
+export async function resolveManagementSource(
+	config: Config,
+	providerConfigPath?: string,
+): Promise<ManagementSource> {
+	const providerBaseUrl = await configuredProviderBaseUrl(providerConfigPath);
+	const managementKeyConfigured = Boolean(config.managementKey);
+	if (config.managementUrl) {
+		const managementUrl = normalizedBaseUrl(config.managementUrl);
+		return managementUrl
+			? { providerBaseUrl, managementUrl, managementKeyConfigured }
+			: {
+					providerBaseUrl,
+					managementKeyConfigured,
+					error: "invalid managementUrl",
+				};
 	}
-
-	const firstProvider = lines.findIndex(
-		(line, index) =>
-			index > sectionIndex &&
-			index < sectionEnd &&
-			line.indent > sectionIndent &&
-			/^-\s*name:/i.test(line.text),
-	);
-	if (firstProvider < 0) return [];
-	const providerIndent = lines[firstProvider]?.indent ?? sectionIndent + 2;
-	const providers: number[] = [];
-	for (let index = firstProvider; index < sectionEnd; index++) {
-		const line = lines[index];
-		if (
-			line?.indent === providerIndent &&
-			/^-\s*name:/i.test(line.text)
-		) {
-			providers.push(index);
-		}
-	}
-
-	const keys: string[] = [];
-	for (let providerIndex = 0; providerIndex < providers.length; providerIndex++) {
-		const start = providers[providerIndex] ?? 0;
-		const end = providers[providerIndex + 1] ?? sectionEnd;
-		let baseUrl = "";
-		let disabled = false;
-		let apiKeysIndent: number | undefined;
-		const providerKeys: string[] = [];
-		const directIndent = Math.min(
-			...lines
-				.slice(start + 1, end)
-				.filter((line) => line.text && line.indent > providerIndent)
-				.map((line) => line.indent),
-		);
-		for (let index = start + 1; index < end; index++) {
-			const line = lines[index];
-			if (!line) continue;
-			if (line.indent === directIndent) {
-				baseUrl ||= yamlField(line.text, "base-url") ?? "";
-				disabled ||= yamlField(line.text, "disabled")?.toLowerCase() === "true";
-			}
-			if (
-				line.indent === directIndent &&
-				line.text.toLowerCase() === "api-key-entries:"
-			) {
-				apiKeysIndent = line.indent;
-				continue;
-			}
-			if (apiKeysIndent === undefined) continue;
-			if (line.indent <= apiKeysIndent) {
-				apiKeysIndent = undefined;
-				continue;
-			}
-			const key = yamlField(line.text, "api-key");
-			if (key) providerKeys.push(key);
-		}
-		try {
-			if (
-				!disabled &&
-				new URL(baseUrl).hostname.toLowerCase() === "api.deepseek.com"
-			) {
-				keys.push(...providerKeys);
-			}
-		} catch {
-			// Ignore malformed and non-official provider URLs.
-		}
-	}
-	return [...new Set(keys)];
-}
-
-function providerName(type?: string): OAuthProviderName | undefined {
-	const provider = type === "xai" ? "grok" : type;
-	return OAUTH_PROVIDERS.has(provider as OAuthProviderName)
-		? (provider as OAuthProviderName)
-		: undefined;
+	return {
+		providerBaseUrl,
+		managementUrl: providerBaseUrl,
+		managementKeyConfigured,
+	};
 }
 
 /** Map the active Pi model to the matching CLIProxyAPI account provider. */
@@ -186,68 +140,224 @@ export function accountsForModel(
 		: [];
 }
 
-async function request(
-	url: string,
-	token: string,
-	headers: Record<string, string> = {},
-): Promise<{ body: unknown; headers: Headers }> {
-	const response = await fetch(url, {
-		headers: {
-			Authorization: `Bearer ${token}`,
-			Accept: "application/json",
-			"User-Agent": "pi-cliproxy-usage",
-			...headers,
-		},
-		signal: AbortSignal.timeout(10_000),
-	});
-	if (!response.ok) throw new Error(`HTTP ${response.status}`);
-	return { body: await response.json(), headers: response.headers };
+function providerName(value?: string): ProviderName | undefined {
+	const provider = value?.toLowerCase();
+	if (provider === "xai") return "grok";
+	if (provider === "anthropic") return "claude";
+	if (
+		provider === "claude" ||
+		provider === "codex" ||
+		provider === "deepseek" ||
+		provider === "grok" ||
+		provider === "kimi"
+	) {
+		return provider;
+	}
+	return undefined;
 }
 
-async function fetchUsage(
-	provider: OAuthProviderName,
-	auth: AuthFile,
-	file: string,
-): Promise<AccountUsage> {
-	const label =
+function remoteProvider(auth: RemoteAuthFile): ProviderName | undefined {
+	for (const value of [
+		auth.provider,
+		auth.account_type,
+		auth.label,
+		auth.name,
+	]) {
+		if (!value) continue;
+		const direct = providerName(value);
+		if (direct) return direct;
+		const inferred = providerForModel("cliproxyapi", value);
+		if (inferred) return inferred;
+	}
+	return undefined;
+}
+
+function remoteLabel(auth: RemoteAuthFile): string {
+	return (
 		auth.email ||
-		basename(file, ".json").replace(/^(claude|codex|xai|kimi)-/, "");
-	try {
-		if (!auth.access_token) throw new Error("missing access_token");
-		if (provider === "claude") {
-			const { body } = await request(USAGE_URLS.claude, auth.access_token, {
-				"anthropic-beta": "oauth-2025-04-20",
-				"Content-Type": "application/json",
-			});
-			return { provider, label, ...parseClaude(body) };
-		}
-		if (provider === "codex") {
-			const headers: Record<string, string> = {};
-			if (auth.account_id) headers["ChatGPT-Account-Id"] = auth.account_id;
-			const response = await request(
-				USAGE_URLS.codex,
-				auth.access_token,
-				headers,
+		auth.label ||
+		basename(auth.name || "remote", ".json").replace(
+			/^(claude|codex|xai|grok|kimi|deepseek)-/,
+			"",
+		)
+	);
+}
+
+function parseUsageResponse(
+	provider: ProviderName,
+	response: UsageResponse,
+): Pick<AccountUsage, "windows" | "balance"> {
+	if (provider === "claude") return parseClaude(response.body);
+	if (provider === "codex") {
+		const parsed = parseCodex(response.body);
+		if (!parsed.windows.length) {
+			const used = toNumber(
+				response.headers.get("x-codex-primary-used-percent"),
 			);
-			const parsed = parseCodex(response.body);
-			if (!parsed.windows.length) {
-				const used = toNumber(
-					response.headers.get("x-codex-primary-used-percent"),
-				);
-				if (used !== undefined) {
-					parsed.windows.push({ label: "limit", used });
-				}
-			}
-			return { provider, label, ...parsed };
+			if (used !== undefined) parsed.windows.push({ label: "limit", used });
 		}
-		if (provider === "kimi") {
-			const { body } = await request(USAGE_URLS.kimi, auth.access_token);
-			return { provider, label, ...parseKimi(body) };
+		return parsed;
+	}
+	if (provider === "deepseek") {
+		const parsed = parseDeepSeek(response.body);
+		if (!parsed.balance?.amounts.length) throw new Error("missing balance");
+		return parsed;
+	}
+	if (provider === "kimi") return parseKimi(response.body);
+	return parseGrok(response.body);
+}
+
+function usageHeaders(
+	provider: ProviderName,
+	accountId?: string,
+): Record<string, string> {
+	if (provider === "claude") {
+		return {
+			"anthropic-beta": "oauth-2025-04-20",
+			"Content-Type": "application/json",
+		};
+	}
+	if (provider === "codex" && accountId) {
+		return { "ChatGPT-Account-Id": accountId };
+	}
+	if (provider === "grok") return { "X-XAI-Token-Auth": "xai-grok-cli" };
+	return {};
+}
+
+function managementEndpoint(baseUrl: string, path: string): string {
+	return `${baseUrl}/v0/management${path}`;
+}
+
+async function managementRequest(
+	baseUrl: string,
+	managementKey: string,
+	path: string,
+	init: RequestInit = {},
+): Promise<Response> {
+	const headers = new Headers(init.headers);
+	headers.set("Authorization", `Bearer ${managementKey}`);
+	headers.set("Accept", "application/json");
+	headers.set("User-Agent", "pi-cliproxy-usage");
+	const response = await fetch(managementEndpoint(baseUrl, path), {
+		...init,
+		headers,
+		signal: AbortSignal.timeout(10_000),
+	});
+	if (!response.ok) throw new ManagementHttpError(response.status);
+	return response;
+}
+
+async function readAuthFiles(
+	baseUrl: string,
+	managementKey: string,
+): Promise<RemoteAuthFile[]> {
+	const response = await managementRequest(
+		baseUrl,
+		managementKey,
+		"/auth-files",
+	);
+	const value = (await response.json()) as { files?: unknown };
+	if (!Array.isArray(value.files)) {
+		throw new Error("invalid management auth-files response");
+	}
+	return value.files.map((item) => item as RemoteAuthFile);
+}
+
+export async function validateManagementAccess(
+	config: Config,
+	providerConfigPath?: string,
+	managementKey = config.managementKey,
+): Promise<string> {
+	const source = await resolveManagementSource(config, providerConfigPath);
+	if (source.error) throw new Error(source.error);
+	if (!source.managementUrl) {
+		throw new Error(
+			"CLIProxyAPI base URL not found; configure the provider or managementUrl",
+		);
+	}
+	if (!managementKey) throw new Error("management key is required");
+	await readAuthFiles(source.managementUrl, managementKey);
+	return source.managementUrl;
+}
+
+function remoteHeaders(values?: Record<string, string | string[]>): Headers {
+	const headers = new Headers();
+	for (const [name, value] of Object.entries(values ?? {})) {
+		for (const item of Array.isArray(value) ? value : [value]) {
+			headers.append(name, item);
 		}
-		const { body } = await request(USAGE_URLS.grok, auth.access_token, {
-			"X-XAI-Token-Auth": "xai-grok-cli",
-		});
-		return { provider, label, ...parseGrok(body) };
+	}
+	return headers;
+}
+
+async function remoteUsageRequest(
+	baseUrl: string,
+	managementKey: string,
+	auth: RemoteAuthFile,
+	provider: ProviderName,
+): Promise<UsageResponse> {
+	if (!auth.auth_index) throw new Error("missing remote auth_index");
+	const response = await managementRequest(
+		baseUrl,
+		managementKey,
+		"/api-call",
+		{
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				auth_index: auth.auth_index,
+				method: "GET",
+				url: USAGE_URLS[provider],
+				header: {
+					Authorization: "Bearer $TOKEN$",
+					Accept: "application/json",
+					"User-Agent": "pi-cliproxy-usage",
+					...usageHeaders(provider, auth.account_id),
+				},
+			}),
+		},
+	);
+	const result = (await response.json()) as RemoteApiCallResponse;
+	if (
+		typeof result.status_code !== "number" ||
+		result.status_code < 200 ||
+		result.status_code >= 300
+	) {
+		throw new Error(
+			typeof result.status_code === "number"
+				? `HTTP ${result.status_code}`
+				: "invalid remote API response",
+		);
+	}
+	let body = result.body;
+	if (typeof body === "string") {
+		try {
+			body = JSON.parse(body);
+		} catch {
+			throw new Error("invalid provider response");
+		}
+	}
+	return { body, headers: remoteHeaders(result.header) };
+}
+
+async function fetchRemoteUsage(
+	baseUrl: string,
+	managementKey: string,
+	auth: RemoteAuthFile,
+	provider: ProviderName,
+): Promise<AccountUsage> {
+	const label = remoteLabel(auth);
+	try {
+		if (auth.unavailable) {
+			throw new Error(auth.status_message || auth.status || "unavailable");
+		}
+		const response = await remoteUsageRequest(
+			baseUrl,
+			managementKey,
+			auth,
+			provider,
+		);
+		return { provider, label, ...parseUsageResponse(provider, response) };
 	} catch (error) {
 		return {
 			provider,
@@ -258,76 +368,82 @@ async function fetchUsage(
 	}
 }
 
-async function fetchDeepSeekBalance(
-	apiKey: string,
-	label: string,
-): Promise<AccountUsage> {
-	try {
-		const { body } = await request(USAGE_URLS.deepseek, apiKey);
-		const parsed = parseDeepSeek(body);
-		if (!parsed.balance?.amounts.length) throw new Error("missing balance");
-		return { provider: "deepseek", label, ...parsed };
-	} catch (error) {
-		return {
-			provider: "deepseek",
-			label,
+function sourceErrors(config: Config, message: string): AccountUsage[] {
+	return (Object.keys(config.providers) as ProviderName[])
+		.filter((provider) => config.providers[provider])
+		.map((provider) => ({
+			provider,
+			label: "remote",
 			windows: [],
-			error: error instanceof Error ? error.message : String(error),
-		};
-	}
+			error: message,
+		}));
 }
 
-async function readDeepSeekAccounts(config: Config): Promise<AccountUsage[]> {
-	if (!config.providers.deepseek) return [];
+function managementErrorMessage(error: unknown): string {
+	if (error instanceof ManagementHttpError) {
+		if (error.status === 401 || error.status === 403) {
+			return `management authentication failed (HTTP ${error.status}); run /cliproxy-usage setup`;
+		}
+		if (error.status === 404) {
+			return "Management API not found (HTTP 404); check CLIProxyAPI configuration or managementUrl";
+		}
+	}
+	return error instanceof Error ? error.message : String(error);
+}
+
+export async function readAccounts(
+	config: Config,
+	options: ReadAccountsOptions = {},
+): Promise<AccountUsage[]> {
+	const source = await resolveManagementSource(
+		config,
+		options.providerConfigPath,
+	);
+	if (source.error) return sourceErrors(config, source.error);
+	if (!source.managementUrl) {
+		return sourceErrors(
+			config,
+			"CLIProxyAPI base URL not found; configure the provider or managementUrl",
+		);
+	}
+	if (!config.managementKey) {
+		return sourceErrors(
+			config,
+			"Management key is not configured; run /cliproxy-usage setup",
+		);
+	}
 	try {
-		const yaml = await readFile(expandHome(config.cliproxyConfigPath), "utf8");
-		const keys = parseDeepSeekApiKeys(yaml);
+		const files = await readAuthFiles(
+			source.managementUrl,
+			config.managementKey,
+		);
+		const accounts = files
+			.map((auth) => ({ auth, provider: remoteProvider(auth) }))
+			.filter(
+				(entry): entry is { auth: RemoteAuthFile; provider: ProviderName } =>
+					Boolean(
+						entry.provider &&
+							!entry.auth.disabled &&
+							config.providers[entry.provider],
+					),
+			);
 		return Promise.all(
-			keys.map((key, index) =>
-				fetchDeepSeekBalance(key, keys.length === 1 ? "" : `key ${index + 1}`),
+			accounts.map(({ auth, provider }) =>
+				fetchRemoteUsage(
+					source.managementUrl as string,
+					config.managementKey,
+					auth,
+					provider,
+				),
 			),
 		);
-	} catch {
-		return [];
+	} catch (error) {
+		if (
+			error instanceof ManagementHttpError &&
+			(error.status === 401 || error.status === 403)
+		) {
+			options.onManagementAuthFailure?.();
+		}
+		return sourceErrors(config, managementErrorMessage(error));
 	}
-}
-
-async function readAccount(
-	dir: string,
-	name: string,
-	config: Config,
-): Promise<AccountUsage | undefined> {
-	try {
-		const file = join(dir, name);
-		const auth = JSON.parse(await readFile(file, "utf8")) as AuthFile;
-		const provider = providerName(auth.type);
-		if (!provider || auth.disabled || !config.providers[provider])
-			return undefined;
-		return fetchUsage(provider, auth, file);
-	} catch {
-		return undefined;
-	}
-}
-
-async function readOAuthAccounts(config: Config): Promise<AccountUsage[]> {
-	const dir = expandHome(config.accountsDir);
-	try {
-		const names = (await readdir(dir)).filter((name) =>
-			name.toLowerCase().endsWith(".json"),
-		);
-		const accounts = await Promise.all(
-			names.map((name) => readAccount(dir, name, config)),
-		);
-		return accounts.filter(Boolean) as AccountUsage[];
-	} catch {
-		return [];
-	}
-}
-
-export async function readAccounts(config: Config): Promise<AccountUsage[]> {
-	const [oauth, deepseek] = await Promise.all([
-		readOAuthAccounts(config),
-		readDeepSeekAccounts(config),
-	]);
-	return [...oauth, ...deepseek];
 }

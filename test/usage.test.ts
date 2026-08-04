@@ -5,18 +5,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	accountsForModel,
-	parseDeepSeekApiKeys,
 	providerForModel,
 	readAccounts,
+	resolveManagementSource,
+	validateManagementAccess,
 } from "../src/usage.js";
 import type { AccountUsage, Config } from "../src/types.js";
 
-const config = (
-	accountsDir: string,
-	cliproxyConfigPath = join(tmpdir(), "missing-cliproxy-config.yaml"),
-): Config => ({
-	accountsDir,
-	cliproxyConfigPath,
+const config = (): Config => ({
+	managementUrl: "",
+	managementKey: "",
 	refreshMinutes: 5,
 	maxVisibleAccounts: 4,
 	providers: {
@@ -28,135 +26,237 @@ const config = (
 	},
 });
 
-test("parseDeepSeekApiKeys accepts only official DeepSeek providers", () => {
-	assert.deepEqual(
-		parseDeepSeekApiKeys(`
-openai-compatibility:
-  - name: DeepSeek
-    base-url: https://api.deepseek.com/
-    api-key-entries:
-      - api-key: sk-one
-      - api-key: "sk-two"
-      - api-key: sk-one
-    models:
-      - name: deepseek-chat
-  - name: disabled-deepseek
-    disabled: true
-    base-url: https://api.deepseek.com/
-    api-key-entries:
-      - api-key: disabled-key
-  - name: third-party
-    base-url: https://example.com/v1
-    api-key-entries:
-      - api-key: do-not-use
-  - name: mimo
-    base-url: https://api.xiaomimimo.com/v1
-    api-key-entries:
-      - api-key: mimo-key
-`),
-		["sk-one", "sk-two"],
-	);
+test("resolveManagementSource reuses provider base URL by default", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-cliproxy-usage-"));
+	try {
+		const providerConfigPath = join(dir, "cliproxyapi.json");
+		await writeFile(
+			providerConfigPath,
+			JSON.stringify({ baseUrl: "http://127.0.0.1:9274/" }),
+		);
+		assert.deepEqual(
+			await resolveManagementSource(config(), providerConfigPath),
+			{
+				providerBaseUrl: "http://127.0.0.1:9274",
+				managementUrl: "http://127.0.0.1:9274",
+				managementKeyConfigured: false,
+			},
+		);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
 });
 
-test("readAccounts loads DeepSeek balance from CLIProxyAPI config", async () => {
+test("resolveManagementSource accepts a private management URL override", async () => {
+	const value = config();
+	value.managementUrl = "http://127.0.0.1:9274/v0/management/";
+	value.managementKey = "secret";
+	assert.deepEqual(await resolveManagementSource(value), {
+		providerBaseUrl: undefined,
+		managementUrl: "http://127.0.0.1:9274",
+		managementKeyConfigured: true,
+	});
+});
+
+test("resolveManagementSource reports malformed overrides", async () => {
+	const value = config();
+	value.managementUrl = "not a URL";
+	assert.deepEqual(await resolveManagementSource(value), {
+		providerBaseUrl: undefined,
+		managementKeyConfigured: false,
+		error: "invalid managementUrl",
+	});
+});
+
+test("validateManagementAccess checks auth-files with the submitted password", async () => {
 	const dir = await mkdtemp(join(tmpdir(), "pi-cliproxy-usage-"));
 	const originalFetch = globalThis.fetch;
-	let requestedUrl = "";
-	let authorization = "";
 	try {
-		const configPath = join(dir, "config.yaml");
+		const providerConfigPath = join(dir, "cliproxyapi.json");
 		await writeFile(
-			configPath,
-			`openai-compatibility:\n  - name: DeepSeek\n    base-url: https://api.deepseek.com/\n    api-key-entries:\n      - api-key: test-secret\n`,
+			providerConfigPath,
+			JSON.stringify({ baseUrl: "https://proxy.example.com" }),
 		);
-		globalThis.fetch = async (input, init) => {
-			requestedUrl = String(input);
-			authorization = new Headers(init?.headers).get("Authorization") ?? "";
-			return new Response(
-				JSON.stringify({
-					is_available: true,
-					balance_infos: [{ currency: "CNY", total_balance: "42.50" }],
-				}),
-				{ status: 200, headers: { "Content-Type": "application/json" } },
-			);
+		let authorization = "";
+		globalThis.fetch = async (_input, init) => {
+			authorization =
+				new Headers(init?.headers).get("Authorization") ?? "";
+			return new Response(JSON.stringify({ files: [] }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
 		};
-		assert.deepEqual(await readAccounts(config(join(dir, "accounts"), configPath)), [
-			{
-				provider: "deepseek",
-				label: "",
-				windows: [],
-				balance: {
-					available: true,
-					amounts: [{ currency: "CNY", amount: 42.5 }],
-				},
-			},
-		]);
-		assert.equal(requestedUrl, "https://api.deepseek.com/user/balance");
-		assert.equal(authorization, "Bearer test-secret");
+		assert.equal(
+			await validateManagementAccess(
+				config(),
+				providerConfigPath,
+				"submitted-secret",
+			),
+			"https://proxy.example.com",
+		);
+		assert.equal(authorization, "Bearer submitted-secret");
 	} finally {
 		globalThis.fetch = originalFetch;
 		await rm(dir, { recursive: true, force: true });
 	}
 });
 
-test("readAccounts returns empty for missing directory", async () => {
-	assert.deepEqual(
-		await readAccounts(config(join(tmpdir(), "missing-cliproxy-dir"))),
-		[],
+test("readAccounts queries provider quota through the remote Management API", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-cliproxy-usage-"));
+	const originalFetch = globalThis.fetch;
+	try {
+		const providerConfigPath = join(dir, "cliproxyapi.json");
+		await writeFile(
+			providerConfigPath,
+			JSON.stringify({ baseUrl: "https://proxy.example.com" }),
+		);
+		const value = config();
+		value.managementKey = "management-secret";
+		const requests: Array<{ url: string; authorization: string; body?: unknown }> = [];
+		globalThis.fetch = async (input, init) => {
+			const url = String(input);
+			const authorization =
+				new Headers(init?.headers).get("Authorization") ?? "";
+			const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+			requests.push({ url, authorization, body });
+			if (url.endsWith("/v0/management/auth-files")) {
+				return new Response(
+					JSON.stringify({
+						files: [
+							{
+								auth_index: "codex-1",
+								name: "codex-user.json",
+								provider: "codex",
+								email: "user@example.com",
+							},
+						],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			return new Response(
+				JSON.stringify({
+					status_code: 200,
+					header: { "Content-Type": ["application/json"] },
+					body: JSON.stringify({
+						rate_limit: {
+							primary_window: {
+								used_percent: 25,
+								limit_window_seconds: 604800,
+							},
+						},
+					}),
+				}),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			);
+		};
+
+		assert.deepEqual(
+			await readAccounts(value, { providerConfigPath }),
+			[
+				{
+					provider: "codex",
+					label: "user@example.com",
+					windows: [{ label: "7d", used: 25, resetsAt: undefined }],
+				},
+			],
+		);
+		assert.equal(requests.length, 2);
+		assert.equal(requests[0]?.authorization, "Bearer management-secret");
+		assert.equal(requests[1]?.authorization, "Bearer management-secret");
+		assert.deepEqual(requests[1]?.body, {
+			auth_index: "codex-1",
+			method: "GET",
+			url: "https://chatgpt.com/backend-api/wham/usage",
+			header: {
+				Authorization: "Bearer $TOKEN$",
+				Accept: "application/json",
+				"User-Agent": "pi-cliproxy-usage",
+			},
+		});
+	} finally {
+		globalThis.fetch = originalFetch;
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("readAccounts reports setup instructions when the management key is missing", async () => {
+	const value = config();
+	value.managementUrl = "https://proxy.example.com";
+	const items = await readAccounts(value);
+	assert.deepEqual(accountsForModel(items, "cliproxyapi", "gpt-5"), [
+		{
+			provider: "codex",
+			label: "remote",
+			windows: [],
+			error: "Management key is not configured; run /cliproxy-usage setup",
+		},
+	]);
+});
+
+test("readAccounts reports missing provider and management URLs", async () => {
+	const value = config();
+	value.managementKey = "secret";
+	const items = await readAccounts(value);
+	assert.equal(
+		accountsForModel(items, "cliproxyapi", "gpt-5")[0]?.error,
+		"CLIProxyAPI base URL not found; configure the provider or managementUrl",
 	);
 });
 
-test("readAccounts skips malformed, unknown, disabled, and disabled-provider files", async () => {
-	const dir = await mkdtemp(join(tmpdir(), "pi-cliproxy-usage-"));
+test("readAccounts signals rejected management credentials", async () => {
+	const originalFetch = globalThis.fetch;
+	let rejected = false;
 	try {
-		await Promise.all([
-			writeFile(join(dir, "broken.json"), "{"),
-			writeFile(
-				join(dir, "unknown.json"),
-				JSON.stringify({ type: "gemini", access_token: "x" }),
-			),
-			writeFile(
-				join(dir, "disabled.json"),
-				JSON.stringify({ type: "claude", access_token: "x", disabled: true }),
-			),
-			writeFile(
-				join(dir, "ignored.txt"),
-				JSON.stringify({ type: "claude", access_token: "x" }),
-			),
-		]);
-		const value = config(dir);
-		value.providers.claude = false;
-		await writeFile(
-			join(dir, "provider-off.json"),
-			JSON.stringify({ type: "claude", access_token: "x" }),
+		const value = config();
+		value.managementUrl = "https://proxy.example.com";
+		value.managementKey = "wrong";
+		globalThis.fetch = async () => new Response("", { status: 401 });
+		const items = await readAccounts(value, {
+			onManagementAuthFailure: () => {
+				rejected = true;
+			},
+		});
+		assert.equal(rejected, true);
+		assert.equal(
+			accountsForModel(items, "cliproxyapi", "gpt-5")[0]?.error,
+			"management authentication failed (HTTP 401); run /cliproxy-usage setup",
 		);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("readAccounts skips disabled, unsupported, and disabled-provider records", async () => {
+	const originalFetch = globalThis.fetch;
+	try {
+		const value = config();
+		value.managementUrl = "https://proxy.example.com";
+		value.managementKey = "secret";
+		value.providers.claude = false;
+		globalThis.fetch = async () =>
+			new Response(
+				JSON.stringify({
+					files: [
+						{ auth_index: "1", provider: "gemini", name: "gemini.json" },
+						{
+							auth_index: "2",
+							provider: "codex",
+							name: "codex.json",
+							disabled: true,
+						},
+						{ auth_index: "3", provider: "claude", name: "claude.json" },
+					],
+				}),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			);
 		assert.deepEqual(await readAccounts(value), []);
 	} finally {
-		await rm(dir, { recursive: true, force: true });
+		globalThis.fetch = originalFetch;
 	}
 });
 
-test("readAccounts reports missing token without making a request", async () => {
-	const dir = await mkdtemp(join(tmpdir(), "pi-cliproxy-usage-"));
-	try {
-		await writeFile(
-			join(dir, "xai-local.json"),
-			JSON.stringify({ type: "xai", email: "me@example.com" }),
-		);
-		assert.deepEqual(await readAccounts(config(dir)), [
-			{
-				provider: "grok",
-				label: "me@example.com",
-				windows: [],
-				error: "missing access_token",
-			},
-		]);
-	} finally {
-		await rm(dir, { recursive: true, force: true });
-	}
-});
-
-test("providerForModel maps CLIProxyAPI model ids to OAuth account types", () => {
+test("providerForModel maps CLIProxyAPI model ids to account types", () => {
 	assert.equal(providerForModel("cliproxyapi", "gpt-5.6-sol"), "codex");
 	assert.equal(providerForModel("cliproxyapi", "gpt-5.3-codex-spark"), "codex");
 	assert.equal(providerForModel("cliproxyapi", "kimi-k2.7-code"), "kimi");

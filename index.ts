@@ -5,14 +5,24 @@ import {
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
-import { loadSettings } from "./src/settings.js";
-import { showSettings } from "./src/settings-ui.js";
-import { accountsForModel, readAccounts } from "./src/usage.js";
+import { loadSettings, saveSettings } from "./src/settings.js";
+import {
+	promptManagementKey,
+	showSettings,
+} from "./src/settings-ui.js";
+import {
+	accountsForModel,
+	ManagementHttpError,
+	readAccounts,
+	resolveManagementSource,
+	validateManagementAccess,
+} from "./src/usage.js";
 import { clearUsage, formatDetails, renderUsage } from "./src/ui.js";
 import type { AccountUsage, Settings } from "./src/types.js";
 
-const commands = ["settings", "status"];
+const commands = ["setup", "logout", "settings", "status"];
 const SETTINGS_PATH = join(getAgentDir(), "pi-cliproxy-usage.json");
+const PROVIDER_CONFIG_PATH = join(getAgentDir(), "cliproxyapi.json");
 const LEGACY_SETTINGS_PATH = join(
 	getAgentDir(),
 	"extensions",
@@ -20,11 +30,24 @@ const LEGACY_SETTINGS_PATH = join(
 	"config.json",
 );
 
+function setupErrorMessage(error: unknown): string {
+	if (error instanceof ManagementHttpError) {
+		if (error.status === 401 || error.status === 403) {
+			return `Management password rejected (HTTP ${error.status}).`;
+		}
+		if (error.status === 404) {
+			return "Management API not found (HTTP 404). Check CLIProxyAPI management configuration.";
+		}
+	}
+	return error instanceof Error ? error.message : String(error);
+}
+
 export default function (pi: ExtensionAPI) {
 	let timer: ReturnType<typeof setInterval> | undefined;
 	let refreshing: Promise<void> | undefined;
 	let latestItems: AccountUsage[] = [];
 	let maxVisibleAccounts = 4;
+	let rejectedManagementKey: string | undefined;
 
 	const itemsForCurrentModel = (
 		ctx: ExtensionContext,
@@ -38,14 +61,36 @@ export default function (pi: ExtensionAPI) {
 		renderUsage(ctx, itemsForCurrentModel(ctx), maxVisibleAccounts);
 	};
 
-	const refresh = (ctx: ExtensionContext, notify = false) =>
+	const refresh = (
+		ctx: ExtensionContext,
+		notify = false,
+		force = false,
+	) =>
 		(refreshing ??= (async () => {
 			const loaded = await loadSettings(SETTINGS_PATH, LEGACY_SETTINGS_PATH);
 			if (loaded.warnings.length && ctx.hasUI) {
 				ctx.ui.notify(loaded.warnings.join("; "), "warning");
 			}
-			latestItems = await readAccounts(loaded.settings);
 			maxVisibleAccounts = loaded.settings.maxVisibleAccounts;
+			if (
+				!force &&
+				!notify &&
+				loaded.settings.managementKey &&
+				rejectedManagementKey === loaded.settings.managementKey
+			) {
+				renderCurrentModel(ctx);
+				return;
+			}
+			let managementAuthFailed = false;
+			latestItems = await readAccounts(loaded.settings, {
+				providerConfigPath: PROVIDER_CONFIG_PATH,
+				onManagementAuthFailure: () => {
+					managementAuthFailed = true;
+				},
+			});
+			rejectedManagementKey = managementAuthFailed
+				? loaded.settings.managementKey
+				: undefined;
 			const items = itemsForCurrentModel(ctx);
 			renderUsage(ctx, items, maxVisibleAccounts);
 			if (notify) {
@@ -72,14 +117,84 @@ export default function (pi: ExtensionAPI) {
 		changedId: string,
 	) => {
 		scheduleRefresh(ctx, settings.refreshMinutes);
-		// Display-only changes rerender cached data without another provider call.
 		if (changedId === "maxVisibleAccounts") {
 			maxVisibleAccounts = settings.maxVisibleAccounts;
 			renderCurrentModel(ctx);
 			return;
 		}
 		if (changedId === "refreshMinutes") return;
-		await refresh(ctx);
+		rejectedManagementKey = undefined;
+		await refresh(ctx, false, true);
+	};
+
+	const setupManagement = async (ctx: ExtensionCommandContext) => {
+		const loaded = await loadSettings(SETTINGS_PATH, LEGACY_SETTINGS_PATH);
+		if (!loaded.writable) {
+			ctx.ui.notify(
+				`Cannot update invalid settings: ${loaded.warnings.join(", ")}`,
+				"error",
+			);
+			return;
+		}
+		const source = await resolveManagementSource(
+			loaded.settings,
+			PROVIDER_CONFIG_PATH,
+		);
+		if (source.error || !source.managementUrl) {
+			ctx.ui.notify(
+				source.error ||
+					"CLIProxyAPI base URL not found. Run /login CLIProxyAPI or set managementUrl in settings.",
+				"error",
+			);
+			return;
+		}
+		const key = await promptManagementKey(ctx, source.managementUrl);
+		if (key === undefined) return;
+		try {
+			await validateManagementAccess(
+				loaded.settings,
+				PROVIDER_CONFIG_PATH,
+				key,
+			);
+		} catch (error) {
+			ctx.ui.notify(setupErrorMessage(error), "error");
+			return;
+		}
+		loaded.settings.managementKey = key;
+		await saveSettings(loaded.settings, loaded.raw, SETTINGS_PATH);
+		rejectedManagementKey = undefined;
+		ctx.ui.notify(
+			`CLIProxyAPI management access configured for ${source.managementUrl}.`,
+			"info",
+		);
+		if (refreshing) await refreshing;
+		await refresh(ctx, true, true);
+	};
+
+	const clearManagement = async (ctx: ExtensionCommandContext) => {
+		const loaded = await loadSettings(SETTINGS_PATH, LEGACY_SETTINGS_PATH);
+		if (!loaded.writable) {
+			ctx.ui.notify(
+				`Cannot update invalid settings: ${loaded.warnings.join(", ")}`,
+				"error",
+			);
+			return;
+		}
+		if (!loaded.settings.managementKey) {
+			ctx.ui.notify("Management password is not configured.", "info");
+			return;
+		}
+		const confirmed = await ctx.ui.confirm(
+			"Clear CLIProxyAPI management password?",
+			"Quota refresh will stop until /cliproxy-usage setup is run again.",
+		);
+		if (!confirmed) return;
+		loaded.settings.managementKey = "";
+		await saveSettings(loaded.settings, loaded.raw, SETTINGS_PATH);
+		rejectedManagementKey = undefined;
+		if (refreshing) await refreshing;
+		await refresh(ctx, false, true);
+		ctx.ui.notify("CLIProxyAPI management password cleared.", "info");
 	};
 
 	const showStatus = async (ctx: ExtensionCommandContext) => {
@@ -88,17 +203,23 @@ export default function (pi: ExtensionAPI) {
 			.filter(([, enabled]) => enabled)
 			.map(([name]) => name)
 			.join(", ");
+		const source = await resolveManagementSource(
+			loaded.settings,
+			PROVIDER_CONFIG_PATH,
+		);
 		ctx.ui.notify(
 			[
 				`Settings: ${loaded.path}`,
-				`Accounts: ${loaded.settings.accountsDir}`,
-				`CLIProxy config: ${loaded.settings.cliproxyConfigPath}`,
+				`Provider config: ${PROVIDER_CONFIG_PATH}`,
+				`Provider base URL: ${source.providerBaseUrl || "not found"}`,
+				`Management URL: ${source.managementUrl || source.error || "not found"}`,
+				`Management key: ${source.managementKeyConfigured ? "configured" : "missing"}`,
 				`Refresh: ${loaded.settings.refreshMinutes} min`,
 				`Visible accounts: ${loaded.settings.maxVisibleAccounts}`,
 				`Providers: ${providers || "none"}`,
-				`Source: ${Object.keys(loaded.raw).length ? "settings file" : "defaults"}`,
+				`Settings source: ${Object.keys(loaded.raw).length ? "settings file" : "defaults"}`,
 			].join("\n"),
-			loaded.warnings.length ? "warning" : "info",
+			loaded.warnings.length || source.error ? "warning" : "info",
 		);
 	};
 
@@ -123,11 +244,12 @@ export default function (pi: ExtensionAPI) {
 		if (timer) clearInterval(timer);
 		timer = undefined;
 		latestItems = [];
+		rejectedManagementKey = undefined;
 		clearUsage(ctx);
 	});
 
 	pi.registerCommand("cliproxy-usage", {
-		description: "Show current-model quota or balance, or manage settings",
+		description: "Show current-model quota or configure management access",
 		getArgumentCompletions: (prefix) => {
 			const value = prefix.trim().toLowerCase();
 			const matches = commands
@@ -138,6 +260,8 @@ export default function (pi: ExtensionAPI) {
 		handler: async (args, ctx) => {
 			const action = args.trim().toLowerCase();
 			if (!action) return refresh(ctx, true);
+			if (action === "setup") return setupManagement(ctx);
+			if (action === "logout") return clearManagement(ctx);
 			if (action === "settings") {
 				return showSettings(
 					ctx,

@@ -3,8 +3,8 @@ import { dirname } from "node:path";
 import type { Settings } from "./types.js";
 
 export const DEFAULT_SETTINGS: Settings = {
-	accountsDir: "~/.cli-proxy-api",
-	cliproxyConfigPath: "~/cliproxyapi/config.yaml",
+	managementUrl: "",
+	managementKey: "",
 	refreshMinutes: 5,
 	maxVisibleAccounts: 4,
 	providers: {
@@ -41,18 +41,16 @@ export function normalizeSettings(value: unknown): {
 	const providers = isObject(value.providers) ? value.providers : {};
 	const settings: Settings = structuredClone(DEFAULT_SETTINGS);
 
-	if (typeof value.accountsDir === "string" && value.accountsDir.trim()) {
-		settings.accountsDir = value.accountsDir.trim();
-	} else if (value.accountsDir !== undefined) {
-		warnings.push("ignored invalid accountsDir");
+	if (typeof value.managementUrl === "string") {
+		settings.managementUrl = value.managementUrl.trim();
+	} else if (value.managementUrl !== undefined) {
+		warnings.push("ignored invalid managementUrl");
 	}
-	if (
-		typeof value.cliproxyConfigPath === "string" &&
-		value.cliproxyConfigPath.trim()
-	) {
-		settings.cliproxyConfigPath = value.cliproxyConfigPath.trim();
-	} else if (value.cliproxyConfigPath !== undefined) {
-		warnings.push("ignored invalid cliproxyConfigPath");
+	const managementKey = value.managementKey ?? value.remoteManagementKey;
+	if (typeof managementKey === "string") {
+		settings.managementKey = managementKey;
+	} else if (managementKey !== undefined) {
+		warnings.push("ignored invalid managementKey");
 	}
 	if (
 		typeof value.refreshMinutes === "number" &&
@@ -160,8 +158,12 @@ export async function saveSettings(
 	raw: JsonObject,
 	settingsPath: string,
 ): Promise<JsonObject> {
+	const preservedRaw: JsonObject = { ...raw };
+	delete preservedRaw.accountsDir;
+	delete preservedRaw.cliproxyConfigPath;
+	delete preservedRaw.remoteManagementKey;
 	const next: JsonObject = {
-		...raw,
+		...preservedRaw,
 		...settings,
 		providers: {
 			...(isObject(raw.providers) ? raw.providers : {}),
