@@ -101,8 +101,6 @@ The widget prioritizes errors, then accounts with the least remaining quota, and
 - `/cliproxy-usage` — refresh and show quota for the current model
 - `/cliproxy-usage settings` — interactively edit settings and provider toggles
 - `/cliproxy-usage status` — show effective settings and settings path
-- `/cliproxy-usage help` — show command help
-- `/cliproxy-usage config` — compatibility alias for `settings`
 
 If a provider returns `401` or `403`, let CLIProxyAPI refresh the account or log in again.
 
