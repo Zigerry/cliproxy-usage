@@ -26,8 +26,8 @@ test("loadSettings uses defaults when file is missing", async () => {
 
 test("normalizeSettings validates values and preserves raw fields", () => {
 	const loaded = normalizeSettings({
-		accountsDir: 1,
-		cliproxyConfigPath: 42,
+		managementUrl: 42,
+		managementKey: 42,
 		refreshMinutes: 10,
 		maxVisibleAccounts: 0,
 		providers: {
@@ -39,7 +39,8 @@ test("normalizeSettings validates values and preserves raw fields", () => {
 		},
 		future: { enabled: true },
 	});
-	assert.equal(loaded.settings.accountsDir, DEFAULT_SETTINGS.accountsDir);
+	assert.equal(loaded.settings.managementUrl, "");
+	assert.equal(loaded.settings.managementKey, "");
 	assert.equal(loaded.settings.refreshMinutes, 10);
 	assert.equal(
 		loaded.settings.maxVisibleAccounts,
@@ -50,11 +51,18 @@ test("normalizeSettings validates values and preserves raw fields", () => {
 	assert.equal(loaded.settings.providers.kimi, false);
 	assert.deepEqual(loaded.raw.future, { enabled: true });
 	assert.deepEqual(loaded.warnings, [
-		"ignored invalid accountsDir",
-		"ignored invalid cliproxyConfigPath",
+		"ignored invalid managementUrl",
+		"ignored invalid managementKey",
 		"ignored invalid maxVisibleAccounts",
 		"ignored invalid providers.codex",
 	]);
+});
+
+test("normalizeSettings migrates the unreleased remoteManagementKey field", () => {
+	const loaded = normalizeSettings({
+		remoteManagementKey: " legacy secret ",
+	});
+	assert.equal(loaded.settings.managementKey, " legacy secret ");
 });
 
 test("loadSettings blocks writes for malformed JSON", async () => {
@@ -70,19 +78,29 @@ test("loadSettings blocks writes for malformed JSON", async () => {
 	}
 });
 
-test("saveSettings preserves unknown fields", async () => {
+test("saveSettings preserves unknown fields and removes retired local fields", async () => {
 	const dir = await mkdtemp(join(tmpdir(), "pi-cliproxy-settings-"));
 	try {
 		const path = join(dir, "settings.json");
 		await saveSettings(
-			{ ...DEFAULT_SETTINGS, refreshMinutes: 15 },
-			{ future: true, providers: { future: false } },
+			{ ...DEFAULT_SETTINGS, refreshMinutes: 15, managementKey: "secret" },
+			{
+				future: true,
+				providers: { future: false },
+				accountsDir: "old",
+				cliproxyConfigPath: "old",
+				remoteManagementKey: "old-secret",
+			},
 			path,
 		);
 		const saved = JSON.parse(await readFile(path, "utf8"));
 		assert.equal(saved.future, true);
 		assert.equal(saved.providers.future, false);
 		assert.equal(saved.refreshMinutes, 15);
+		assert.equal(saved.managementKey, "secret");
+		assert.equal(saved.accountsDir, undefined);
+		assert.equal(saved.cliproxyConfigPath, undefined);
+		assert.equal(saved.remoteManagementKey, undefined);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}

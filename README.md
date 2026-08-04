@@ -48,6 +48,8 @@ Other model families hide the widget because there is no matching quota or balan
 
 - [Pi Coding Agent](https://github.com/earendil-works/pi)
 - [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) with at least one supported OAuth account or official provider API key configured
+- CLIProxyAPI Management API with `/auth-files` and `/api-call` support
+- The password used by CLIProxyAPI's `management.html`
 
 ## Install
 
@@ -89,8 +91,8 @@ Missing files use defaults. Changes from the interactive settings UI apply immed
 
 ```json
 {
-  "accountsDir": "~/.cli-proxy-api",
-  "cliproxyConfigPath": "~/cliproxyapi/config.yaml",
+  "managementUrl": "",
+  "managementKey": "",
   "refreshMinutes": 5,
   "maxVisibleAccounts": 4,
   "providers": {
@@ -103,17 +105,37 @@ Missing files use defaults. Changes from the interactive settings UI apply immed
 }
 ```
 
-Credentials stay local and are sent only to official provider quota or balance endpoints. DeepSeek keys are read only from `openai-compatibility` entries whose base URL is the official `api.deepseek.com` host. Token refresh remains CLIProxyAPI's responsibility; the extension rereads account and config files on every refresh.
+### Management setup
 
-The widget prioritizes errors, then accounts with the least remaining quota or balance, and shows an overflow row when more accounts exist. Invalid setting values are ignored with a warning. Unknown fields are preserved when saving.
+Run the interactive setup command after installation:
+
+```text
+/cliproxy-usage setup
+```
+
+The extension reads `<getAgentDir()>/cliproxyapi.json` and reuses its `baseUrl`. It then displays a masked password prompt for the password used by CLIProxyAPI's `management.html`, validates it against `/v0/management/auth-files`, and saves it only after validation succeeds.
+
+The password is stored as `managementKey` in `pi-cliproxy-usage.json`. This file is written with mode `0600`; `/cliproxy-usage status` only reports whether the key is configured and never prints it. CLIProxyAPI stores its own `remote-management.secret-key` as a bcrypt hash, so the original password cannot be recovered from the server's YAML config.
+
+`managementUrl` is normally empty. Set it through `/cliproxy-usage settings` only when the management endpoint differs from the provider base URL, for example when using a private SSH tunnel while inference uses a public address. Enter the CLIProxyAPI root URL; a trailing `/v0/management` is accepted and normalized.
+
+CLIProxyAPI requires a valid management key even for localhost. Direct LAN or public access also requires remote management to be enabled on the server. Use HTTPS, a VPN, or an SSH tunnel for untrusted networks because the management key can access privileged Management API operations.
+
+The extension uses only the Management API as its account source. It lists accounts through `/v0/management/auth-files`, then asks the remote server to call official quota/balance endpoints through `/v0/management/api-call`. OAuth access tokens and provider API keys stay on the CLIProxyAPI server. These quota HTTP requests do **not** consume LLM input/output tokens. With the default settings, one account-list request plus one quota request per supported account runs every five minutes.
+
+After a `401` or `403`, automatic retries stop for the rejected password to avoid CLIProxyAPI's temporary ban after repeated authentication failures. Run `/cliproxy-usage setup` again after changing the password.
+
+The widget prioritizes errors, then accounts with the least remaining quota or balance, and shows an overflow row when more accounts exist. Invalid setting values are ignored with a warning. Unknown fields are preserved when saving. Retired local-file fields are removed the next time settings are saved.
 
 ## Commands
 
 - `/cliproxy-usage` — refresh and show quota for the current model
-- `/cliproxy-usage settings` — interactively edit settings and provider toggles
-- `/cliproxy-usage status` — show effective settings and settings path
+- `/cliproxy-usage setup` — enter, validate, and save the Management API password
+- `/cliproxy-usage logout` — remove the saved Management API password
+- `/cliproxy-usage settings` — edit the management URL override, refresh interval, and provider toggles
+- `/cliproxy-usage status` — show effective URLs and whether management access is configured
 
-If a provider returns `401` or `403`, let CLIProxyAPI refresh the account or log in again.
+If an upstream provider quota request returns `401` or `403`, let CLIProxyAPI refresh the account or log in again.
 
 ## Development
 
