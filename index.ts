@@ -92,6 +92,7 @@ export default function (pi: ExtensionAPI) {
 			[
 				`Settings: ${loaded.path}`,
 				`Accounts: ${loaded.settings.accountsDir}`,
+				`CLIProxy config: ${loaded.settings.cliproxyConfigPath}`,
 				`Refresh: ${loaded.settings.refreshMinutes} min`,
 				`Visible accounts: ${loaded.settings.maxVisibleAccounts}`,
 				`Providers: ${providers || "none"}`,
@@ -126,7 +127,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("cliproxy-usage", {
-		description: "Show current-model quota or manage extension settings",
+		description: "Show current-model quota or balance, or manage settings",
 		getArgumentCompletions: (prefix) => {
 			const value = prefix.trim().toLowerCase();
 			const matches = commands

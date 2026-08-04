@@ -12,12 +12,15 @@ import {
 import { loadSettings, saveSettings } from "./settings.js";
 import type { ProviderName, Settings } from "./types.js";
 
-const providerIds = new Set<ProviderName>([
-	"claude",
-	"codex",
-	"grok",
-	"kimi",
-]);
+const providers = ["claude", "codex", "deepseek", "grok", "kimi"] as const;
+const providerIds = new Set<ProviderName>(providers);
+const providerLabels: Record<ProviderName, string> = {
+	claude: "Claude",
+	codex: "Codex",
+	deepseek: "DeepSeek",
+	grok: "Grok",
+	kimi: "Kimi",
+};
 
 export async function showSettings(
 	ctx: ExtensionCommandContext,
@@ -59,6 +62,19 @@ export async function showSettings(
 				},
 			},
 			{
+				id: "cliproxyConfigPath",
+				label: "CLIProxyAPI config",
+				description: "YAML config containing OpenAI-compatible API keys",
+				currentValue: settings.cliproxyConfigPath,
+				submenu: (currentValue, close) => {
+					const input = new Input();
+					input.setValue(currentValue);
+					input.onSubmit = (value) => close(value.trim() || undefined);
+					input.onEscape = () => close(undefined);
+					return input;
+				},
+			},
+			{
 				id: "refreshMinutes",
 				label: "Refresh interval (min)",
 				description: "Minutes between automatic usage refreshes",
@@ -72,9 +88,9 @@ export async function showSettings(
 				currentValue: String(settings.maxVisibleAccounts),
 				values: ["1", "2", "3", "4", "5", "10"],
 			},
-			...(["claude", "codex", "grok", "kimi"] as const).map((provider) => ({
+			...providers.map((provider) => ({
 				id: provider,
-				label: `${provider[0]?.toUpperCase()}${provider.slice(1)}`,
+				label: providerLabels[provider],
 				description: `Show ${provider} accounts`,
 				currentValue: settings.providers[provider] ? "enabled" : "disabled",
 				values: ["enabled", "disabled"],
@@ -95,6 +111,7 @@ export async function showSettings(
 			(id, value) => {
 				const previous = structuredClone(settings);
 				if (id === "accountsDir") settings.accountsDir = value;
+				if (id === "cliproxyConfigPath") settings.cliproxyConfigPath = value;
 				if (id === "refreshMinutes") settings.refreshMinutes = Number(value);
 				if (id === "maxVisibleAccounts") {
 					settings.maxVisibleAccounts = Number(value);
@@ -112,7 +129,9 @@ export async function showSettings(
 						settings = previous;
 						let previousValue: string;
 						if (id === "accountsDir") previousValue = previous.accountsDir;
-						else if (id === "refreshMinutes") {
+						else if (id === "cliproxyConfigPath") {
+							previousValue = previous.cliproxyConfigPath;
+						} else if (id === "refreshMinutes") {
 							previousValue = String(previous.refreshMinutes);
 						} else if (id === "maxVisibleAccounts") {
 							previousValue = String(previous.maxVisibleAccounts);
@@ -134,7 +153,7 @@ export async function showSettings(
 			new Text(
 				theme.fg(
 					"dim",
-					`Accounts directory: ${settings.accountsDir}\n${settingsPath}`,
+					`Accounts directory: ${settings.accountsDir}\nCLIProxyAPI config: ${settings.cliproxyConfigPath}\n${settingsPath}`,
 				),
 				1,
 				1,

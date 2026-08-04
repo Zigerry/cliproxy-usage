@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+	formatBalanceAmount,
 	formatCompact,
 	formatDetails,
 	remainingColor,
@@ -9,6 +10,12 @@ import {
 	usageBar,
 } from "../src/ui.js";
 import type { Theme, UiContext, UsageWindow } from "../src/types.js";
+
+test("formatBalanceAmount renders common currency symbols", () => {
+	assert.equal(formatBalanceAmount({ currency: "CNY", amount: 42.5 }), "¥42.50");
+	assert.equal(formatBalanceAmount({ currency: "USD", amount: 5 }), "$5.00");
+	assert.equal(formatBalanceAmount({ currency: "AUD", amount: 3 }), "3.00 AUD");
+});
 
 test("usageBar renders remaining quota with an eight-cell default", () => {
 	assert.equal(usageBar(-10), "────────");
@@ -90,6 +97,67 @@ function createContext() {
 		},
 	};
 }
+
+test("renderUsage shows DeepSeek as an amount-only card", () => {
+	const { ctx, render } = createContext();
+	renderUsage(
+		ctx,
+		[
+			{
+				provider: "deepseek",
+				label: "",
+				windows: [],
+				balance: {
+					available: true,
+					amounts: [{ currency: "CNY", amount: 42.5 }],
+				},
+			},
+		],
+		4,
+	);
+	assert.equal(render()[0], "DeepSeek │ ¥42.50\u001b[0m");
+});
+
+test("renderUsage prioritizes the lowest DeepSeek balances", () => {
+	const { ctx, render } = createContext();
+	renderUsage(
+		ctx,
+		[
+			{
+				provider: "deepseek",
+				label: "high",
+				windows: [],
+				balance: {
+					available: true,
+					amounts: [{ currency: "CNY", amount: 100 }],
+				},
+			},
+			{
+				provider: "deepseek",
+				label: "low",
+				windows: [],
+				balance: {
+					available: true,
+					amounts: [{ currency: "CNY", amount: 10 }],
+				},
+			},
+			{
+				provider: "deepseek",
+				label: "medium",
+				windows: [],
+				balance: {
+					available: true,
+					amounts: [{ currency: "CNY", amount: 50 }],
+				},
+			},
+		],
+		2,
+	);
+	const lines = render();
+	assert.match(lines[0] ?? "", /DeepSeek balance · 3 accounts/);
+	assert.match(lines[1] ?? "", /low.*medium/);
+	assert.doesNotMatch(lines[1] ?? "", /high/);
+});
 
 test("renderUsage keeps seven-day before five-hour and colors remaining quota", () => {
 	const { ctx, colors, render } = createContext();
@@ -217,13 +285,22 @@ test("renderUsage limits rows and prioritizes errors then highest usage", () => 
 	);
 });
 
-test("formatCompact handles errors and missing windows", () => {
+test("formatCompact handles balances, errors, and missing windows", () => {
 	assert.equal(
 		formatCompact([
+			{
+				provider: "deepseek",
+				label: "",
+				windows: [],
+				balance: {
+					available: true,
+					amounts: [{ currency: "CNY", amount: 42.5 }],
+				},
+			},
 			{ provider: "grok", label: "x", windows: [], error: "HTTP 401" },
 			{ provider: "codex", label: "empty", windows: [] },
 		]),
-		"Grok x: ! HTTP 401\nCodex empty  –",
+		"DeepSeek  ¥42.50\nGrok x: ! HTTP 401\nCodex empty  –",
 	);
 });
 
@@ -231,6 +308,15 @@ test("formatDetails handles empty, success, errors, and missing data", () => {
 	assert.equal(formatDetails([]), "No enabled CLIProxyAPI accounts found.");
 	assert.equal(
 		formatDetails([
+			{
+				provider: "deepseek",
+				label: "",
+				windows: [],
+				balance: {
+					available: true,
+					amounts: [{ currency: "CNY", amount: 42.5 }],
+				},
+			},
 			{
 				provider: "kimi",
 				label: "me",
@@ -243,6 +329,7 @@ test("formatDetails handles empty, success, errors, and missing data", () => {
 			{ provider: "codex", label: "empty", windows: [] },
 		]),
 		[
+			"deepseek: ¥42.50",
 			"kimi/me: 7d ━━━━──── left 50% · 5h ━━━━━━━━ left 95%",
 			"grok/bad: HTTP 403",
 			"codex/empty: No usage window",

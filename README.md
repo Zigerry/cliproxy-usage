@@ -1,12 +1,13 @@
 # pi-cliproxy-usage
 
-CLIProxyAPI OAuth account quota widget for Pi Coding Agent.
+CLIProxyAPI account quota and balance widget for Pi Coding Agent.
 
-The widget follows Pi's active model and shows only matching account quotas:
+The widget follows Pi's active model and shows only matching account usage:
 
 ```text
-Codex │ user │ 7d ━━━━━━── left 69%
-Kimi  │ user │ 7d ━━━━──── left 50% │ 5h ━━━━━━━━ left 95%
+Codex   │ user │ 7d ━━━━━━── left 69%
+Kimi    │ user │ 7d ━━━━──── left 50% │ 5h ━━━━━━━━ left 95%
+DeepSeek │ ¥42.50
 ```
 
 Multiple matching accounts use a content-aware compact layout. Cards keep their natural width and are packed left-to-right with a fixed gap, up to three per row. The renderer prioritizes fewer rows, then uses the longest progress bar that still fits. Codex cards often fit three per row because they only contain `7d`; wider Kimi cards naturally fit fewer. The provider appears once as a compact group heading and long account labels are truncated:
@@ -29,6 +30,7 @@ Bars and percentages represent quota **remaining**:
 
 - Claude (`type: "claude"`): 7d and 5h windows
 - Codex (`type: "codex"`): 7d and/or 5h windows returned by the account plan
+- DeepSeek (`openai-compatibility` with `api.deepseek.com`): monetary account balance
 - Grok (`type: "xai"`): 7d unified billing window
 - Kimi Code (`type: "kimi"`): 7d subscription and 5h rate-limit windows
 
@@ -37,14 +39,15 @@ The active model id selects the account type shown by the widget:
 - `gpt-*` or `codex-*` → Codex
 - `kimi-*` or `moonshot-*` → Kimi
 - `claude-*` → Claude
+- `deepseek-*` → DeepSeek
 - `grok-*` or `xai-*` → Grok
 
-Other model families hide the widget because there is no matching OAuth quota source.
+Other model families hide the widget because there is no matching quota or balance source.
 
 ## Requirements
 
 - [Pi Coding Agent](https://github.com/earendil-works/pi)
-- [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) with at least one supported OAuth account configured
+- [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) with at least one supported OAuth account or official provider API key configured
 
 ## Install
 
@@ -81,20 +84,22 @@ Missing files use defaults. Changes from the interactive settings UI apply immed
 ```json
 {
   "accountsDir": "~/.cli-proxy-api",
+  "cliproxyConfigPath": "~/cliproxyapi/config.yaml",
   "refreshMinutes": 5,
   "maxVisibleAccounts": 4,
   "providers": {
     "claude": true,
     "codex": true,
+    "deepseek": true,
     "grok": true,
     "kimi": true
   }
 }
 ```
 
-Credentials stay local and are sent only to official provider quota endpoints. Token refresh remains CLIProxyAPI's responsibility; the extension rereads account files on every refresh so it uses tokens written back by CLIProxyAPI.
+Credentials stay local and are sent only to official provider quota or balance endpoints. DeepSeek keys are read only from `openai-compatibility` entries whose base URL is the official `api.deepseek.com` host. Token refresh remains CLIProxyAPI's responsibility; the extension rereads account and config files on every refresh.
 
-The widget prioritizes errors, then accounts with the least remaining quota, and shows an overflow row when more accounts exist. Invalid setting values are ignored with a warning. Unknown fields are preserved when saving.
+The widget prioritizes errors, then accounts with the least remaining quota or balance, and shows an overflow row when more accounts exist. Invalid setting values are ignored with a warning. Unknown fields are preserved when saving.
 
 ## Commands
 

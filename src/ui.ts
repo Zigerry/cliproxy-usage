@@ -1,5 +1,7 @@
 import type {
+	AccountBalance,
 	AccountUsage,
+	BalanceAmount,
 	ProviderName,
 	Theme,
 	UiContext,
@@ -9,6 +11,7 @@ import type {
 const PROVIDER_LABELS: Record<ProviderName, string> = {
 	claude: "Claude",
 	codex: "Codex",
+	deepseek: "DeepSeek",
 	grok: "Grok",
 	kimi: "Kimi",
 };
@@ -41,18 +44,45 @@ function formatWindow(window: UsageWindow): string {
 	return `${window.label} ${usageBar(remaining)} left ${Math.round(remaining)}%`;
 }
 
-function maxUsed(item: AccountUsage): number {
+export function formatBalanceAmount(value: BalanceAmount): string {
+	const symbols: Record<string, string> = {
+		CNY: "¥",
+		EUR: "€",
+		GBP: "£",
+		JPY: "¥",
+		RMB: "¥",
+		USD: "$",
+	};
+	const currency = value.currency.toUpperCase();
+	const amount = value.amount.toFixed(2);
+	return symbols[currency]
+		? `${symbols[currency]}${amount}`
+		: `${amount} ${currency}`;
+}
+
+function formatBalance(balance: AccountBalance): string {
+	return balance.amounts.map(formatBalanceAmount).join(" / ");
+}
+
+function itemPriority(item: AccountUsage): number {
+	if (item.error) return Number.POSITIVE_INFINITY;
+	if (item.balance) {
+		const amount = Math.min(...item.balance.amounts.map((value) => value.amount));
+		return Number.isFinite(amount) ? -amount : Number.NEGATIVE_INFINITY;
+	}
 	return Math.max(-1, ...item.windows.map((window) => window.used));
 }
 
 export function formatCompact(items: AccountUsage[]): string {
 	return items
 		.map((item) => {
-			if (item.error) {
-				return `${PROVIDER_LABELS[item.provider]} ${accountLabel(item.label)}: ! ${item.error}`;
-			}
+			const identity = [PROVIDER_LABELS[item.provider], accountLabel(item.label)]
+				.filter(Boolean)
+				.join(" ");
+			if (item.error) return `${identity}: ! ${item.error}`;
+			if (item.balance) return `${identity}  ${formatBalance(item.balance) || "–"}`;
 			const windows = item.windows.map(formatWindow);
-			return `${PROVIDER_LABELS[item.provider]} ${accountLabel(item.label)}  ${windows.join("  ") || "–"}`;
+			return `${identity}  ${windows.join("  ") || "–"}`;
 		})
 		.join("\n");
 }
@@ -61,9 +91,13 @@ export function formatDetails(items: AccountUsage[]): string {
 	if (!items.length) return "No enabled CLIProxyAPI accounts found.";
 	return items
 		.map((item) => {
-			if (item.error) return `${item.provider}/${item.label}: ${item.error}`;
+			const identity = item.label ? `${item.provider}/${item.label}` : item.provider;
+			if (item.error) return `${identity}: ${item.error}`;
+			if (item.balance) {
+				return `${identity}: ${formatBalance(item.balance) || "No balance"}`;
+			}
 			const windows = item.windows.map(formatWindow);
-			return `${item.provider}/${item.label}: ${windows.join(" · ") || "No usage window"}`;
+			return `${identity}: ${windows.join(" · ") || "No usage window"}`;
 		})
 		.join("\n");
 }
@@ -121,7 +155,7 @@ export function renderUsage(
 		.map((item, index) => ({
 			item,
 			index,
-			priority: item.error ? Number.POSITIVE_INFINITY : maxUsed(item),
+			priority: itemPriority(item),
 		}))
 		.sort(
 			(left, right) =>
@@ -159,11 +193,21 @@ export function renderUsage(
 							? styledProvider(item.provider, PROVIDER_LABELS[item.provider])
 							: PROVIDER_LABELS[item.provider];
 						const prefix = groupedProvider
-							? account + separator
-							: provider + separator + account + separator;
+							? item.label
+								? account + separator
+								: ""
+							: provider + separator + (item.label ? account + separator : "");
 						let content: string;
 						if (item.error) {
 							content = paint("error", `! ${item.error}`);
+						} else if (item.balance) {
+							const amount = formatBalance(item.balance);
+							const unavailable =
+								!item.balance.available ||
+								item.balance.amounts.every((value) => value.amount <= 0);
+							content = amount
+								? paint(unavailable ? "error" : "text", amount)
+								: paint("dim", "–");
 						} else {
 							const meters = item.windows.map((window) => {
 								const remaining = remainingPercent(window);
@@ -222,11 +266,12 @@ export function renderUsage(
 				const lines: string[] = [];
 				if (groupedProvider) {
 					const count = items.length;
+					const kind = groupedProvider === "deepseek" ? "balance" : "quota";
 					lines.push(
 						truncateAnsi(
 							`${styledProvider(groupedProvider, PROVIDER_LABELS[groupedProvider])} ${theme.fg(
 								"dim",
-								`quota · ${count} account${count === 1 ? "" : "s"}`,
+								`${kind} · ${count} account${count === 1 ? "" : "s"}`,
 							)}`,
 							width,
 						),

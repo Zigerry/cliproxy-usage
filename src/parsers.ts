@@ -48,9 +48,7 @@ function windows(
 	return { windows: sortedWindows(candidates) };
 }
 
-export function parseClaude(
-	body: unknown,
-): Pick<AccountUsage, "windows"> {
+export function parseClaude(body: unknown): Pick<AccountUsage, "windows"> {
 	const root = body as Record<string, unknown>;
 	const window = (
 		value: unknown,
@@ -66,6 +64,27 @@ export function parseClaude(
 		window(root?.seven_day, "7d"),
 		window(root?.five_hour, "5h"),
 	);
+}
+
+export function parseDeepSeek(
+	body: unknown,
+): Pick<AccountUsage, "windows" | "balance"> {
+	const root = body as Record<string, unknown> | undefined;
+	const infos = Array.isArray(root?.balance_infos) ? root.balance_infos : [];
+	const amounts = infos.flatMap((value) => {
+		const item = value as Record<string, unknown> | undefined;
+		const amount = toNumber(item?.total_balance);
+		const currency =
+			typeof item?.currency === "string" ? item.currency.trim().toUpperCase() : "";
+		return amount === undefined || !currency ? [] : [{ currency, amount }];
+	});
+	return {
+		windows: [],
+		balance: {
+			available: root?.is_available !== false,
+			amounts,
+		},
+	};
 }
 
 function codexWindow(

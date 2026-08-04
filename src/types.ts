@@ -1,7 +1,13 @@
-export type ProviderName = "claude" | "codex" | "grok" | "kimi";
+export type ProviderName =
+	| "claude"
+	| "codex"
+	| "deepseek"
+	| "grok"
+	| "kimi";
 
 export type Settings = {
 	accountsDir: string;
+	cliproxyConfigPath: string;
 	refreshMinutes: number;
 	maxVisibleAccounts: number;
 	providers: Record<ProviderName, boolean>;
@@ -17,10 +23,21 @@ export type UsageWindow = {
 	resetsAt?: Date;
 };
 
+export type BalanceAmount = {
+	currency: string;
+	amount: number;
+};
+
+export type AccountBalance = {
+	available: boolean;
+	amounts: BalanceAmount[];
+};
+
 export type AccountUsage = {
 	provider: ProviderName;
 	label: string;
 	windows: UsageWindow[];
+	balance?: AccountBalance;
 	error?: string;
 };
 
