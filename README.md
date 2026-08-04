@@ -157,7 +157,7 @@ Run the interactive setup command after installation:
 /cliproxy-usage setup
 ```
 
-The extension reads `<getAgentDir()>/cliproxyapi.json` and reuses its `baseUrl`. It then displays a masked password prompt for the password used by CLIProxyAPI's `management.html`, validates it against `/v0/management/auth-files`, and saves it only after validation succeeds.
+The extension reads `<getAgentDir()>/cliproxyapi.json` and reuses its `baseUrl`. Both CLIProxyAPI forms accepted by the provider are supported: a root URL such as `http://127.0.0.1:8317` and the same URL ending in `/v1`; trailing slashes are ignored and reverse-proxy path prefixes are preserved. It then displays a masked password prompt for the password used by CLIProxyAPI's `management.html`, validates it against `/v0/management/auth-files`, and saves it only after validation succeeds.
 
 The password is stored as `managementKey` in `pi-cliproxy-usage.json`. This file is written with mode `0600`; `/cliproxy-usage status` only reports whether the key is configured and never prints it. CLIProxyAPI stores its own `remote-management.secret-key` as a bcrypt hash, so the original password cannot be recovered from the server's YAML config.
 

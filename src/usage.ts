@@ -79,7 +79,8 @@ function normalizedBaseUrl(value: string): string | undefined {
 		const url = new URL(value.trim());
 		url.pathname = url.pathname
 			.replace(/\/+$/, "")
-			.replace(/\/v0\/management$/i, "");
+			.replace(/\/v0\/management$/i, "")
+			.replace(/\/v1$/i, "");
 		url.search = "";
 		url.hash = "";
 		return url.toString().replace(/\/$/, "");
