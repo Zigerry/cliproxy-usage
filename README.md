@@ -107,6 +107,16 @@ pi update --extensions
 
 Run `/reload` after updating. Git installations without an explicit tag follow the repository's default branch; installations pinned to a tag remain on that tag.
 
+#### Upgrading from 0.3.x to 0.4
+
+Version 0.4 replaces local CLIProxyAPI credential-file reads with the Management API. Existing display and provider settings migrate automatically, but quota refresh requires one interactive setup after upgrading:
+
+```text
+/cliproxy-usage setup
+```
+
+The setup reuses the provider's existing Base URL and asks for the password accepted by CLIProxyAPI's `management.html`.
+
 To test only the local extension while an older installed package is still present:
 
 ```bash
