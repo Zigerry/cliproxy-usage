@@ -11,7 +11,7 @@ import { accountsForModel, readAccounts } from "./src/usage.js";
 import { clearUsage, formatDetails, renderUsage } from "./src/ui.js";
 import type { AccountUsage, Settings } from "./src/types.js";
 
-const commands = ["settings", "status", "help", "config"];
+const commands = ["settings", "status"];
 const SETTINGS_PATH = join(getAgentDir(), "pi-cliproxy-usage.json");
 const LEGACY_SETTINGS_PATH = join(
 	getAgentDir(),
@@ -137,7 +137,7 @@ export default function (pi: ExtensionAPI) {
 		handler: async (args, ctx) => {
 			const action = args.trim().toLowerCase();
 			if (!action) return refresh(ctx, true);
-			if (action === "settings" || action === "config") {
+			if (action === "settings") {
 				return showSettings(
 					ctx,
 					SETTINGS_PATH,
@@ -146,19 +146,6 @@ export default function (pi: ExtensionAPI) {
 				);
 			}
 			if (action === "status") return showStatus(ctx);
-			if (action === "help") {
-				ctx.ui.notify(
-					[
-						"/cliproxy-usage — refresh current-model quota",
-						"/cliproxy-usage settings — edit settings",
-						"/cliproxy-usage status — show effective settings",
-						"/cliproxy-usage help — show this help",
-						`Manual settings: ${SETTINGS_PATH}`,
-					].join("\n"),
-					"info",
-				);
-				return;
-			}
 			ctx.ui.notify(
 				`Usage: /cliproxy-usage [${commands.join("|")}]`,
 				"warning",
