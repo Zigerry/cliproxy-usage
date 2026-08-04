@@ -4,6 +4,7 @@ import {
 	durationLabel,
 	parseClaude,
 	parseCodex,
+	parseDeepSeek,
 	parseGrok,
 	parseKimi,
 	toNumber,
@@ -25,6 +26,30 @@ test("durationLabel renders human-readable window lengths", () => {
 	assert.equal(durationLabel(7200), "2h");
 	assert.equal(durationLabel(172800), "2d");
 	assert.equal(durationLabel(90), "90s");
+});
+
+test("DeepSeek parses monetary balances without quota windows", () => {
+	assert.deepEqual(
+		parseDeepSeek({
+			is_available: true,
+			balance_infos: [
+				{ currency: "cny", total_balance: "110.25" },
+				{ currency: "USD", total_balance: 5 },
+				{ currency: "", total_balance: "invalid" },
+			],
+		}),
+		{
+			windows: [],
+			balance: {
+				available: true,
+				amounts: [
+					{ currency: "CNY", amount: 110.25 },
+					{ currency: "USD", amount: 5 },
+				],
+			},
+		},
+	);
+	assert.equal(parseDeepSeek({ is_available: false }).balance?.available, false);
 });
 
 test("Claude parses optional windows and reset dates", () => {

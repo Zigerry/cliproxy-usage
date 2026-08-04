@@ -4,9 +4,16 @@ import type { Settings } from "./types.js";
 
 export const DEFAULT_SETTINGS: Settings = {
 	accountsDir: "~/.cli-proxy-api",
+	cliproxyConfigPath: "~/cliproxyapi/config.yaml",
 	refreshMinutes: 5,
 	maxVisibleAccounts: 4,
-	providers: { claude: true, codex: true, grok: true, kimi: true },
+	providers: {
+		claude: true,
+		codex: true,
+		deepseek: true,
+		grok: true,
+		kimi: true,
+	},
 };
 
 type JsonObject = Record<string, unknown>;
@@ -40,6 +47,14 @@ export function normalizeSettings(value: unknown): {
 		warnings.push("ignored invalid accountsDir");
 	}
 	if (
+		typeof value.cliproxyConfigPath === "string" &&
+		value.cliproxyConfigPath.trim()
+	) {
+		settings.cliproxyConfigPath = value.cliproxyConfigPath.trim();
+	} else if (value.cliproxyConfigPath !== undefined) {
+		warnings.push("ignored invalid cliproxyConfigPath");
+	}
+	if (
 		typeof value.refreshMinutes === "number" &&
 		Number.isInteger(value.refreshMinutes) &&
 		value.refreshMinutes >= 1
@@ -57,7 +72,13 @@ export function normalizeSettings(value: unknown): {
 	} else if (value.maxVisibleAccounts !== undefined) {
 		warnings.push("ignored invalid maxVisibleAccounts");
 	}
-	for (const provider of ["claude", "codex", "grok", "kimi"] as const) {
+	for (const provider of [
+		"claude",
+		"codex",
+		"deepseek",
+		"grok",
+		"kimi",
+	] as const) {
 		if (typeof providers[provider] === "boolean") {
 			settings.providers[provider] = providers[provider];
 		} else if (providers[provider] !== undefined) {

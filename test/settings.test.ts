@@ -27,9 +27,16 @@ test("loadSettings uses defaults when file is missing", async () => {
 test("normalizeSettings validates values and preserves raw fields", () => {
 	const loaded = normalizeSettings({
 		accountsDir: 1,
+		cliproxyConfigPath: 42,
 		refreshMinutes: 10,
 		maxVisibleAccounts: 0,
-		providers: { claude: false, codex: "yes", kimi: false, future: true },
+		providers: {
+			claude: false,
+			codex: "yes",
+			deepseek: false,
+			kimi: false,
+			future: true,
+		},
 		future: { enabled: true },
 	});
 	assert.equal(loaded.settings.accountsDir, DEFAULT_SETTINGS.accountsDir);
@@ -39,10 +46,12 @@ test("normalizeSettings validates values and preserves raw fields", () => {
 		DEFAULT_SETTINGS.maxVisibleAccounts,
 	);
 	assert.equal(loaded.settings.providers.claude, false);
+	assert.equal(loaded.settings.providers.deepseek, false);
 	assert.equal(loaded.settings.providers.kimi, false);
 	assert.deepEqual(loaded.raw.future, { enabled: true });
 	assert.deepEqual(loaded.warnings, [
 		"ignored invalid accountsDir",
+		"ignored invalid cliproxyConfigPath",
 		"ignored invalid maxVisibleAccounts",
 		"ignored invalid providers.codex",
 	]);
