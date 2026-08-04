@@ -5,8 +5,16 @@ CLIProxyAPI OAuth account quota widget for Pi Coding Agent.
 The widget follows Pi's active model and shows only matching account quotas:
 
 ```text
-● Codex │ user │ 7d ━━━━━━── left 69%
-● Kimi  │ user │ 7d ━━━━──── left 50%  │  5h ━━━━━━━━ left 95%
+Codex │ user │ 7d ━━━━━━── left 69%
+Kimi  │ user │ 7d ━━━━──── left 50% │ 5h ━━━━━━━━ left 95%
+```
+
+Multiple matching accounts use a responsive grid. Wide terminals show three columns, medium terminals show two, and narrow terminals fall back to one. The provider appears once as a compact group heading, long account labels are truncated, and bar width adapts to the column count:
+
+```text
+Codex quota · 3 accounts
+work-a… │ 7d ━━━━━─ left 85%    work-b… │ 7d ━━━━── left 68%
+work-c… │ 7d ━━━━━━ left 96%
 ```
 
 Quota windows always use the same order: **7d first, 5h second**. A window is omitted when the provider does not return it. In particular, Codex accounts that expose only a 7-day window no longer show it as a session window.

@@ -109,7 +109,7 @@ test("renderUsage keeps seven-day before five-hour and colors remaining quota", 
 	);
 	assert.equal(
 		render()[0],
-		"Kimi │ account │ 7d ━━━━──── left 50%  │  5h ━━━━━━━━ left 95%\u001b[0m",
+		"Kimi │ account │ 7d ━━━━──── left 50% │ 5h ━━━━━━━━ left 95%\u001b[0m",
 	);
 	assert.equal(colors.filter((color) => color === "success").length, 4);
 });
@@ -135,7 +135,7 @@ test("renderUsage uses yellow below 30% left and red below 10% left", () => {
 	assert.equal(colors.filter((color) => color === "error").length, 2);
 });
 
-test("renderUsage colors Claude orange and aligns provider/account columns", () => {
+test("renderUsage packs two cards into one row when width allows", () => {
 	const { ctx, render } = createContext();
 	renderUsage(
 		ctx,
@@ -153,10 +153,39 @@ test("renderUsage colors Claude orange and aligns provider/account columns", () 
 		],
 		4,
 	);
-	assert.deepEqual(render(), [
-		"\u001b[38;5;208mClaude\u001b[0m │ a    │ 7d ━━━━──── left 50%\u001b[0m",
-		"Codex  │ long │ 7d ━━━━━━── left 69%\u001b[0m",
-	]);
+	const lines = render(120);
+	assert.equal(lines.length, 1);
+	assert.match(lines[0] ?? "", /Claude/);
+	assert.match(lines[0] ?? "", /Codex/);
+	assert.match(lines[0] ?? "", /7d ━━━─── left 50%/);
+	assert.match(lines[0] ?? "", /7d ━━━━── left 69%/);
+});
+
+test("renderUsage switches between three, two, and one account columns", () => {
+	const { ctx, render } = createContext();
+	renderUsage(
+		ctx,
+		["alpha", "beta", "gamma"].map((label, index) => ({
+			provider: "codex" as const,
+			label,
+			windows: [{ label: "7d", used: 20 + index * 10 }],
+		})),
+		4,
+	);
+	const wide = render(180);
+	assert.equal(wide.length, 2);
+	assert.match(wide[0] ?? "", /Codex quota · 3 accounts/);
+	assert.match(wide[1] ?? "", /alpha/);
+	assert.match(wide[1] ?? "", /beta/);
+	assert.match(wide[1] ?? "", /gamma/);
+
+	const medium = render(120);
+	assert.equal(medium.length, 3);
+	assert.match(medium[1] ?? "", /gamma.*beta/);
+	assert.match(medium[2] ?? "", /alpha/);
+
+	const narrow = render(80);
+	assert.equal(narrow.length, 4);
 });
 
 test("renderUsage limits rows and prioritizes errors then highest usage", () => {
@@ -179,11 +208,11 @@ test("renderUsage limits rows and prioritizes errors then highest usage", () => 
 		2,
 	);
 	const lines = render();
-	assert.equal(lines.length, 3);
+	assert.equal(lines.length, 2);
 	assert.match(lines[0] ?? "", /broken/);
-	assert.match(lines[1] ?? "", /high/);
+	assert.match(lines[0] ?? "", /high/);
 	assert.equal(
-		lines[2],
+		lines[1],
 		"… 1 more account · /cliproxy-usage for details\u001b[0m",
 	);
 });

@@ -89,6 +89,23 @@ function truncateAnsi(text: string, width: number): string {
 	return `${result}\u001b[0m`;
 }
 
+function ansiWidth(text: string): number {
+	return Array.from(
+		text.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, ""),
+	).length;
+}
+
+function padAnsi(text: string, width: number): string {
+	return text + " ".repeat(Math.max(0, width - ansiWidth(text)));
+}
+
+function fitPlain(text: string, width: number): string {
+	const points = Array.from(text);
+	if (points.length <= width) return text.padEnd(width);
+	if (width <= 1) return "…".slice(0, width);
+	return `${points.slice(0, width - 1).join("")}…`;
+}
+
 export function clearUsage(ctx: UiContext): void {
 	ctx.ui.setStatus("cliproxy-usage", undefined);
 	ctx.ui.setWidget("cliproxy-usage", undefined);
@@ -117,54 +134,122 @@ export function renderUsage(
 		.slice(0, maxVisibleAccounts)
 		.map(({ item }) => item);
 	const hiddenCount = items.length - visibleItems.length;
-	const providerWidth = Math.max(
-		...visibleItems.map((item) => PROVIDER_LABELS[item.provider].length),
-	);
-	const accountWidth = Math.max(
-		...visibleItems.map((item) => accountLabel(item.label).length),
-	);
 	ctx.ui.setWidget(
 		"cliproxy-usage",
 		(_tui: unknown, theme: Theme) => ({
 			invalidate() {},
 			render(width: number): string[] {
-				const lines = visibleItems.map((item) => {
-					const providerText =
-						PROVIDER_LABELS[item.provider].padEnd(providerWidth);
-					const providerLabel =
-						item.provider === "claude"
-							? `${CLAUDE_ORANGE}${providerText}\u001b[0m`
-							: theme.fg("text", providerText);
-					const separator = theme.fg("dim", " │ ");
-					const prefix =
-						providerLabel +
-						separator +
-						theme.fg("muted", accountLabel(item.label).padEnd(accountWidth)) +
-						separator;
-					if (item.error) {
-						return truncateAnsi(
-							`${prefix}${theme.fg("error", `! ${item.error}`)}`,
-							width,
+				const columns = Math.min(
+					visibleItems.length,
+					width >= 165 ? 3 : width >= 104 ? 2 : 1,
+				);
+				const gap = 2;
+				const cellWidth = Math.max(
+					1,
+					Math.floor((width - gap * (columns - 1)) / columns),
+				);
+				const barWidth = columns === 3 ? 4 : columns === 2 ? 6 : 8;
+				const providers = new Set(visibleItems.map((item) => item.provider));
+				const groupedProvider =
+					providers.size === 1 && visibleItems.length > 1
+						? visibleItems[0]?.provider
+						: undefined;
+				const providerWidth = groupedProvider
+					? 0
+					: Math.max(
+							...visibleItems.map(
+								(item) => PROVIDER_LABELS[item.provider].length,
+							),
 						);
-					}
-					const meter = (window: UsageWindow) => {
-						const remaining = remainingPercent(window);
-						const color = remainingColor(remaining);
-						const bar = usageBar(remaining);
-						const filled = bar.match(/^━*/)?.[0] ?? "";
-						const empty = bar.slice(filled.length);
-						return [
-							theme.fg("muted", window.label),
-							`${theme.fg(color, filled)}${theme.fg("dim", empty)}`,
-							theme.fg(color, `left ${Math.round(remaining)}%`),
-						].join(" ");
-					};
-					const windows = item.windows.map(meter);
-					const content = windows.length
-						? windows.join(theme.fg("dim", "  │  "))
+				const styledProvider = (provider: ProviderName, text: string) =>
+					provider === "claude"
+						? `${CLAUDE_ORANGE}${text}\u001b[0m`
+						: theme.fg("text", text);
+				const meter = (window: UsageWindow) => {
+					const remaining = remainingPercent(window);
+					const color = remainingColor(remaining);
+					const bar = usageBar(remaining, barWidth);
+					const filled = bar.match(/^━*/)?.[0] ?? "";
+					const empty = bar.slice(filled.length);
+					return [
+						theme.fg("muted", window.label),
+						`${theme.fg(color, filled)}${theme.fg("dim", empty)}`,
+						theme.fg(color, `left ${Math.round(remaining)}%`),
+					].join(" ");
+				};
+				const contents = visibleItems.map((item) => {
+					if (item.error) return theme.fg("error", `! ${item.error}`);
+					const meters = item.windows.map(meter);
+					return meters.length
+						? meters.join(theme.fg("dim", " │ "))
 						: theme.fg("dim", "–");
-					return truncateAnsi(`${prefix}${content}`, width);
 				});
+				const maxContentWidth = Math.max(
+					...contents.map((content) =>
+						Math.max(1, Math.min(ansiWidth(content), cellWidth - 8)),
+					),
+				);
+				const prefixWidth = groupedProvider ? 3 : providerWidth + 6;
+				const accountBudget = Math.max(
+					6,
+					Math.min(
+						24,
+						cellWidth - prefixWidth - Math.max(1, maxContentWidth),
+					),
+				);
+				const accountWidth = Math.max(
+					1,
+					Math.min(
+						accountBudget,
+						Math.max(
+							...visibleItems.map(
+								(item) => Array.from(accountLabel(item.label)).length,
+							),
+						),
+					),
+				);
+				const cards = visibleItems.map((item, index) => {
+					const separator = theme.fg("dim", " │ ");
+					const account = theme.fg(
+						"muted",
+						fitPlain(accountLabel(item.label), accountWidth),
+					);
+					const prefix = groupedProvider
+						? account + separator
+						: styledProvider(
+								item.provider,
+								PROVIDER_LABELS[item.provider].padEnd(providerWidth),
+							) +
+							separator +
+							account +
+							separator;
+					return truncateAnsi(`${prefix}${contents[index]}`, cellWidth);
+				});
+				const lines: string[] = [];
+				if (groupedProvider) {
+					const count = items.length;
+					lines.push(
+						truncateAnsi(
+							`${styledProvider(groupedProvider, PROVIDER_LABELS[groupedProvider])} ${theme.fg(
+								"dim",
+								`quota · ${count} account${count === 1 ? "" : "s"}`,
+							)}`,
+							width,
+						),
+					);
+				}
+				for (let index = 0; index < cards.length; index += columns) {
+					const row = cards.slice(index, index + columns);
+					lines.push(
+						row
+							.map((card, cellIndex) =>
+								cellIndex < row.length - 1
+									? padAnsi(card, cellWidth)
+									: card,
+							)
+							.join(" ".repeat(gap)),
+					);
+				}
 				if (hiddenCount) {
 					lines.push(
 						truncateAnsi(
