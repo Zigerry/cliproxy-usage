@@ -48,12 +48,12 @@ Other model families hide the widget because there is no matching quota or balan
 
 - [Pi Coding Agent](https://github.com/earendil-works/pi)
 - [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) with at least one supported OAuth account or official provider API key configured
-- CLIProxyAPI Management API with `/auth-files` and `/api-call` support
+- CLIProxyAPI Management API with `/auth-files` and `/api-call` support; DeepSeek also requires `/openai-compatibility`
 - The password used by CLIProxyAPI's `management.html`
 
 ## Install
 
-From npm:
+From npm (recommended; does not require Git):
 
 ```bash
 pi install npm:cliproxy-usage
@@ -65,15 +65,49 @@ Or directly from this repository:
 pi install https://github.com/Zigerry/cliproxy-usage.git
 ```
 
+Git sources require a working `git` executable. On Windows, `spawn git ENOENT` means Git for Windows is not installed or is not available in `PATH`; use the npm package or install Git and reopen the terminal.
+
 For a local development checkout:
 
 ```bash
 pi install /absolute/path/to/cliproxy-usage
 ```
 
-After installing or updating, run `/reload` in Pi.
+### Quick start
 
-To test only the local extension while an older npm package is still installed:
+After installation, start or reload Pi and configure Management API access:
+
+```text
+/reload
+/cliproxy-usage setup
+/cliproxy-usage status
+```
+
+Enter the same password used by CLIProxyAPI's `management.html`. The setup command validates the password before saving it.
+
+### Update
+
+Update only this npm package:
+
+```bash
+pi update npm:cliproxy-usage
+```
+
+Update a GitHub installation:
+
+```bash
+pi update --extension https://github.com/Zigerry/cliproxy-usage.git
+```
+
+Or update all installed Pi packages:
+
+```bash
+pi update --extensions
+```
+
+Run `/reload` after updating. Git installations without an explicit tag follow the repository's default branch; installations pinned to a tag remain on that tag.
+
+To test only the local extension while an older installed package is still present:
 
 ```bash
 pi --no-extensions -e ./index.ts
@@ -136,6 +170,32 @@ The widget prioritizes errors, then accounts with the least remaining quota or b
 - `/cliproxy-usage status` — show effective URLs and whether management access is configured
 
 If an upstream provider quota request returns `401` or `403`, let CLIProxyAPI refresh the account or log in again.
+
+## Troubleshooting
+
+### Management password rejected
+
+Run `/cliproxy-usage setup` again. The password is the one accepted by CLIProxyAPI's `management.html`, not the ordinary API key used for model inference.
+
+### Management API returns 404
+
+Check that the configured root URL reaches the same CLIProxyAPI instance and that its Management API exposes `/v0/management/auth-files` and `/v0/management/api-call`.
+
+### DeepSeek balance is missing
+
+DeepSeek must be configured under `openai-compatibility` with a base URL whose hostname is exactly `api.deepseek.com`. The extension discovers its `auth-index` through `/v0/management/openai-compatibility`; arbitrary provider names are supported. Third-party relay URLs are intentionally ignored.
+
+### The widget is hidden after switching models
+
+The widget is scoped to the active model family. Run `/cliproxy-usage status`, then `/cliproxy-usage` for a detailed refresh result. Unsupported model families intentionally hide the widget.
+
+### Git installation fails with `spawn git ENOENT`
+
+Install Git for Windows and reopen PowerShell, or install from npm instead:
+
+```powershell
+pi install npm:cliproxy-usage
+```
 
 ## Development
 
