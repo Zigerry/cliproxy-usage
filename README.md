@@ -1,4 +1,4 @@
-# pi-cliproxy-usage
+# cliproxy-usage
 
 CLIProxyAPI account quota and balance widget for Pi Coding Agent.
 
@@ -54,19 +54,19 @@ Other model families hide the widget because there is no matching quota or balan
 From npm:
 
 ```bash
-pi install npm:@zigerry/pi-cliproxy-usage
+pi install npm:cliproxy-usage
 ```
 
 Or directly from this repository:
 
 ```bash
-pi install https://github.com/Zigerry/pi-cliproxy-usage.git
+pi install https://github.com/Zigerry/cliproxy-usage.git
 ```
 
 For a local development checkout:
 
 ```bash
-pi install /absolute/path/to/pi-cliproxy-usage
+pi install /absolute/path/to/cliproxy-usage
 ```
 
 After installing or updating, run `/reload` in Pi.
@@ -131,4 +131,4 @@ not published.
 
 ## Support
 
-Report bugs and request features at [Zigerry/pi-cliproxy-usage](https://github.com/Zigerry/pi-cliproxy-usage/issues).
+Report bugs and request features at [Zigerry/cliproxy-usage](https://github.com/Zigerry/cliproxy-usage/issues).
