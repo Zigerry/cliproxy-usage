@@ -51,13 +51,19 @@ Other model families hide the widget because there is no matching quota or balan
 
 ## Install
 
-From this repository:
+From npm:
+
+```bash
+pi install npm:@zigerry/pi-cliproxy-usage
+```
+
+Or directly from this repository:
 
 ```bash
 pi install https://github.com/Zigerry/pi-cliproxy-usage.git
 ```
 
-Or install a local development checkout:
+For a local development checkout:
 
 ```bash
 pi install /absolute/path/to/pi-cliproxy-usage
