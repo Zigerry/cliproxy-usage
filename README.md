@@ -30,7 +30,7 @@ Bars and percentages represent quota **remaining**:
 
 - Claude (`type: "claude"`): 7d and 5h windows
 - Codex (`type: "codex"`): 7d and/or 5h windows returned by the account plan
-- DeepSeek (`openai-compatibility` with `api.deepseek.com`): monetary account balance
+- DeepSeek (`openai-compatibility` with the exact `api.deepseek.com` host): monetary account balance discovered through the Management API
 - Grok (`type: "xai"`): 7d unified billing window
 - Kimi Code (`type: "kimi"`): 7d subscription and 5h rate-limit windows
 
@@ -119,9 +119,9 @@ The password is stored as `managementKey` in `pi-cliproxy-usage.json`. This file
 
 `managementUrl` is normally empty. Set it through `/cliproxy-usage settings` only when the management endpoint differs from the provider base URL, for example when using a private SSH tunnel while inference uses a public address. Enter the CLIProxyAPI root URL; a trailing `/v0/management` is accepted and normalized.
 
-CLIProxyAPI requires a valid management key even for localhost. Direct LAN or public access also requires remote management to be enabled on the server. Use HTTPS, a VPN, or an SSH tunnel for untrusted networks because the management key can access privileged Management API operations.
+CLIProxyAPI requires a valid management key even for localhost. Direct LAN or public access also requires remote management to be enabled on the server. The extension preserves the configured Management URL protocol and does not rewrite or warn about HTTP versus HTTPS.
 
-The extension uses only the Management API as its account source. It lists accounts through `/v0/management/auth-files`, then asks the remote server to call official quota/balance endpoints through `/v0/management/api-call`. OAuth access tokens and provider API keys stay on the CLIProxyAPI server. These quota HTTP requests do **not** consume LLM input/output tokens. With the default settings, one account-list request plus one quota request per supported account runs every five minutes.
+The extension uses only the Management API as its account source. It lists OAuth accounts through `/v0/management/auth-files`. DeepSeek entries are discovered through `/v0/management/openai-compatibility` by requiring the exact `api.deepseek.com` hostname and retaining only each entry's `auth-index`; returned API key fields are never logged, persisted, or forwarded by the extension. The server then calls official quota/balance endpoints through `/v0/management/api-call`. These quota HTTP requests do **not** consume LLM input/output tokens. With the default settings, account discovery plus one quota request per supported account runs every five minutes.
 
 After a `401` or `403`, automatic retries stop for the rejected password to avoid CLIProxyAPI's temporary ban after repeated authentication failures. Run `/cliproxy-usage setup` again after changing the password.
 

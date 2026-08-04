@@ -112,6 +112,7 @@ test("readAccounts queries provider quota through the remote Management API", as
 		);
 		const value = config();
 		value.managementKey = "management-secret";
+		value.providers.deepseek = false;
 		const requests: Array<{ url: string; authorization: string; body?: unknown }> = [];
 		globalThis.fetch = async (input, init) => {
 			const url = String(input);
@@ -180,6 +181,98 @@ test("readAccounts queries provider quota through the remote Management API", as
 	}
 });
 
+test("readAccounts discovers official DeepSeek entries through openai-compatibility", async () => {
+	const originalFetch = globalThis.fetch;
+	try {
+		const value = config();
+		value.managementUrl = "http://192.168.1.10:9274";
+		value.managementKey = "management-secret";
+		for (const provider of ["claude", "codex", "grok", "kimi"] as const) {
+			value.providers[provider] = false;
+		}
+		const requests: Array<{ url: string; body?: unknown }> = [];
+		globalThis.fetch = async (input, init) => {
+			const url = String(input);
+			const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+			requests.push({ url, body });
+			if (url.endsWith("/v0/management/auth-files")) {
+				return new Response(JSON.stringify({ files: [] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			if (url.endsWith("/v0/management/openai-compatibility")) {
+				return new Response(
+					JSON.stringify({
+						"openai-compatibility": [
+							{
+								name: "official-balance",
+								"base-url": "https://api.deepseek.com/v1",
+								"api-key-entries": [
+									{
+										"api-key": "must-not-be-forwarded",
+										"auth-index": "deepseek-1",
+									},
+								],
+							},
+							{
+								name: "third-party-deepseek",
+								"base-url": "https://relay.example.com/v1",
+								"auth-index": "relay-1",
+							},
+						],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			return new Response(
+				JSON.stringify({
+					status_code: 200,
+					header: { "Content-Type": ["application/json"] },
+					body: JSON.stringify({
+						is_available: true,
+						balance_infos: [
+							{ currency: "CNY", total_balance: "42.50" },
+						],
+					}),
+				}),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			);
+		};
+
+		assert.deepEqual(await readAccounts(value), [
+			{
+				provider: "deepseek",
+				label: "official-balance",
+				windows: [],
+				balance: {
+					available: true,
+					amounts: [{ currency: "CNY", amount: 42.5 }],
+				},
+			},
+		]);
+		assert.equal(requests.length, 3);
+		assert.equal(requests[0]?.url, "http://192.168.1.10:9274/v0/management/auth-files");
+		assert.equal(
+			requests[1]?.url,
+			"http://192.168.1.10:9274/v0/management/openai-compatibility",
+		);
+		assert.deepEqual(requests[2]?.body, {
+			auth_index: "deepseek-1",
+			method: "GET",
+			url: "https://api.deepseek.com/user/balance",
+			header: {
+				Authorization: "Bearer $TOKEN$",
+				Accept: "application/json",
+				"User-Agent": "pi-cliproxy-usage",
+			},
+		});
+		assert.equal(JSON.stringify(requests).includes("must-not-be-forwarded"), false);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
 test("readAccounts reports setup instructions when the management key is missing", async () => {
 	const value = config();
 	value.managementUrl = "https://proxy.example.com";
@@ -234,6 +327,7 @@ test("readAccounts skips disabled, unsupported, and disabled-provider records", 
 		value.managementUrl = "https://proxy.example.com";
 		value.managementKey = "secret";
 		value.providers.claude = false;
+		value.providers.deepseek = false;
 		globalThis.fetch = async () =>
 			new Response(
 				JSON.stringify({
