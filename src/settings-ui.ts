@@ -9,18 +9,11 @@ import {
 	SettingsList,
 	Text,
 } from "@earendil-works/pi-tui";
+import { PROVIDERS, PROVIDER_LABELS } from "./providers.js";
 import { loadSettings, saveSettings } from "./settings.js";
 import type { ProviderName, Settings } from "./types.js";
 
-const providers = ["claude", "codex", "deepseek", "grok", "kimi"] as const;
-const providerIds = new Set<ProviderName>(providers);
-const providerLabels: Record<ProviderName, string> = {
-	claude: "Claude",
-	codex: "Codex",
-	deepseek: "DeepSeek",
-	grok: "Grok",
-	kimi: "Kimi",
-};
+const providerIds = new Set<ProviderName>(PROVIDERS);
 
 class PasswordInput extends Input {
 	override render(width: number): string[] {
@@ -83,6 +76,23 @@ export async function promptManagementKey(
 	});
 }
 
+export function settingsSummary(settings: Settings, settingsPath: string): string {
+	return `Management URL: ${settings.managementUrl || "automatic"}\nManagement key: ${settings.managementKey ? "configured" : "run /cliproxy-usage setup"}\n${settingsPath}`;
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function settingValue(settings: Settings, id: string): string {
+	if (id === "managementUrl") return settings.managementUrl || "automatic";
+	if (id === "refreshMinutes") return String(settings.refreshMinutes);
+	if (id === "maxVisibleAccounts") {
+		return String(settings.maxVisibleAccounts);
+	}
+	return settings.providers[id as ProviderName] ? "enabled" : "disabled";
+}
+
 export async function showSettings(
 	ctx: ExtensionCommandContext,
 	settingsPath: string,
@@ -104,8 +114,10 @@ export async function showSettings(
 		return;
 	}
 	let settings = loaded.settings;
+	let persistedSettings = structuredClone(loaded.settings);
 	let raw = loaded.raw;
 	let saveQueue = Promise.resolve();
+	let revision = 0;
 
 	await ctx.ui.custom((tui, theme, _keybindings, done) => {
 		const items: SettingItem[] = [
@@ -136,10 +148,10 @@ export async function showSettings(
 				currentValue: String(settings.maxVisibleAccounts),
 				values: ["1", "2", "3", "4", "5", "10"],
 			},
-			...providers.map((provider) => ({
+			...PROVIDERS.map((provider) => ({
 				id: provider,
-				label: providerLabels[provider],
-				description: `Show ${provider} accounts`,
+				label: PROVIDER_LABELS[provider],
+				description: `Show ${PROVIDER_LABELS[provider]} accounts`,
 				currentValue: settings.providers[provider] ? "enabled" : "disabled",
 				values: ["enabled", "disabled"],
 			})),
@@ -152,12 +164,25 @@ export async function showSettings(
 				1,
 			),
 		);
-		const list = new SettingsList(
+		const summary = new Text("", 1, 1);
+		const updateSummary = () => {
+			summary.setText(theme.fg("dim", settingsSummary(settings, settingsPath)));
+		};
+		updateSummary();
+		let list: SettingsList;
+		const restorePersistedValues = () => {
+			settings = structuredClone(persistedSettings);
+			for (const item of items) {
+				list.updateValue(item.id, settingValue(settings, item.id));
+			}
+			updateSummary();
+		};
+		list = new SettingsList(
 			items,
 			Math.min(items.length + 2, 15),
 			getSettingsListTheme(),
 			(id, value) => {
-				const previous = structuredClone(settings);
+				const changeRevision = ++revision;
 				if (id === "managementUrl") {
 					settings.managementUrl = value === "automatic" ? "" : value;
 				}
@@ -168,48 +193,40 @@ export async function showSettings(
 				if (providerIds.has(id as ProviderName)) {
 					settings.providers[id as ProviderName] = value === "enabled";
 				}
+				updateSummary();
+				tui.requestRender();
 				const next = structuredClone(settings);
-				saveQueue = saveQueue
-					.then(async () => {
+				saveQueue = saveQueue.then(async () => {
+					try {
 						raw = await saveSettings(next, raw, settingsPath);
-						await onChange(next, id);
-					})
-					.catch((error) => {
-						settings = previous;
-						let previousValue: string;
-						if (id === "managementUrl") {
-							previousValue = previous.managementUrl || "automatic";
-						} else if (id === "refreshMinutes") {
-							previousValue = String(previous.refreshMinutes);
-						} else if (id === "maxVisibleAccounts") {
-							previousValue = String(previous.maxVisibleAccounts);
-						} else {
-							previousValue = previous.providers[id as ProviderName]
-								? "enabled"
-								: "disabled";
-						}
-						list.updateValue(id, previousValue);
-						ctx.ui.notify(`Failed to save settings: ${error.message}`, "error");
+						persistedSettings = next;
+					} catch (error) {
+						if (changeRevision === revision) restorePersistedValues();
+						ctx.ui.notify(`Failed to save settings: ${errorMessage(error)}`, "error");
 						tui.requestRender();
-					});
+						return;
+					}
+					try {
+						await onChange(next, id);
+					} catch (error) {
+						ctx.ui.notify(
+							`Settings saved, but failed to apply: ${errorMessage(error)}`,
+							"error",
+						);
+					}
+				});
 			},
 			() => done(undefined),
 			{ enableSearch: true },
 		);
 		container.addChild(list);
-		container.addChild(
-			new Text(
-				theme.fg(
-					"dim",
-					`Management URL: ${settings.managementUrl || "automatic"}\nManagement key: ${settings.managementKey ? "configured" : "run /cliproxy-usage setup"}\n${settingsPath}`,
-				),
-				1,
-				1,
-			),
-		);
+		container.addChild(summary);
 		return {
 			render: (width: number) => container.render(width),
-			invalidate: () => container.invalidate(),
+			invalidate: () => {
+				updateSummary();
+				container.invalidate();
+			},
 			handleInput(data: string) {
 				list.handleInput?.(data);
 				tui.requestRender();

@@ -165,7 +165,7 @@ The password is stored as `managementKey` in `pi-cliproxy-usage.json`. This file
 
 CLIProxyAPI requires a valid management key even for localhost. Direct LAN or public access also requires remote management to be enabled on the server. The extension preserves the configured Management URL protocol and does not rewrite or warn about HTTP versus HTTPS.
 
-The extension uses only the Management API as its account source. It lists OAuth accounts through `/v0/management/auth-files`. DeepSeek entries are discovered through `/v0/management/openai-compatibility` by requiring the exact `api.deepseek.com` hostname and retaining only each entry's `auth-index`; returned API key fields are never logged, persisted, or forwarded by the extension. The server then calls official quota/balance endpoints through `/v0/management/api-call`. These quota HTTP requests do **not** consume LLM input/output tokens. With the default settings, account discovery plus one quota request per supported account runs every five minutes.
+The extension uses only the Management API as its account source. It lists OAuth accounts through `/v0/management/auth-files`. DeepSeek entries are discovered through `/v0/management/openai-compatibility` by requiring the exact `api.deepseek.com` hostname and retaining only each entry's `auth-index`; returned API key fields are never logged, persisted, or forwarded by the extension. The server then calls official quota/balance endpoints through `/v0/management/api-call`. These quota HTTP requests do **not** consume LLM input/output tokens. Refreshes query only the active Pi model's matching provider, cache the result for model switching, and refresh stale provider data on demand. The default automatic refresh interval is five minutes.
 
 After a `401` or `403`, automatic retries stop for the rejected password to avoid CLIProxyAPI's temporary ban after repeated authentication failures. Run `/cliproxy-usage setup` again after changing the password.
 
@@ -175,9 +175,12 @@ The widget prioritizes errors, then accounts with the least remaining quota or b
 
 - `/cliproxy-usage` — refresh and show quota for the current model
 - `/cliproxy-usage setup` — enter, validate, and save the Management API password
+- `/cliproxy-usage login` — alias for `setup`
 - `/cliproxy-usage logout` — remove the saved Management API password
 - `/cliproxy-usage settings` — edit the management URL override, refresh interval, and provider toggles
-- `/cliproxy-usage status` — show effective URLs and whether management access is configured
+- `/cliproxy-usage status` — show effective URLs, settings warnings, and the current provider's last refresh time
+
+Detailed quota notifications include the provider reset countdown when the upstream API supplies a reset timestamp. The compact widget intentionally omits reset times.
 
 If an upstream provider quota request returns `401` or `403`, let CLIProxyAPI refresh the account or log in again.
 

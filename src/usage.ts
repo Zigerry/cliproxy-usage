@@ -8,7 +8,8 @@ import {
 	parseKimi,
 	toNumber,
 } from "./parsers.js";
-import type { AccountUsage, Config, ProviderName } from "./types.js";
+import { PROVIDERS } from "./providers.js";
+import type { AccountUsage, ProviderName, Settings } from "./types.js";
 
 type RemoteAuthFile = {
 	auth_index?: string;
@@ -53,6 +54,7 @@ export type ManagementSource = {
 
 export type ReadAccountsOptions = {
 	providerConfigPath?: string;
+	providers?: readonly ProviderName[];
 	onManagementAuthFailure?: () => void;
 };
 
@@ -106,7 +108,7 @@ async function configuredProviderBaseUrl(
 }
 
 export async function resolveManagementSource(
-	config: Config,
+	config: Settings,
 	providerConfigPath?: string,
 ): Promise<ManagementSource> {
 	const providerBaseUrl = await configuredProviderBaseUrl(providerConfigPath);
@@ -157,14 +159,8 @@ function providerName(value?: string): ProviderName | undefined {
 	const provider = value?.toLowerCase();
 	if (provider === "xai") return "grok";
 	if (provider === "anthropic") return "claude";
-	if (
-		provider === "claude" ||
-		provider === "codex" ||
-		provider === "deepseek" ||
-		provider === "grok" ||
-		provider === "kimi"
-	) {
-		return provider;
+	if ((PROVIDERS as readonly string[]).includes(provider ?? "")) {
+		return provider as ProviderName;
 	}
 	return undefined;
 }
@@ -186,14 +182,14 @@ function remoteProvider(auth: RemoteAuthFile): ProviderName | undefined {
 }
 
 function remoteLabel(auth: RemoteAuthFile): string {
-	return (
+	const label =
 		auth.email ||
 		auth.label ||
 		basename(auth.name || "remote", ".json").replace(
 			/^(claude|codex|xai|grok|kimi|deepseek)-/,
 			"",
-		)
-	);
+		);
+	return label || "remote";
 }
 
 function parseUsageResponse(
@@ -329,7 +325,7 @@ async function readDeepSeekAuthFiles(
 }
 
 export async function validateManagementAccess(
-	config: Config,
+	config: Settings,
 	providerConfigPath?: string,
 	managementKey = config.managementKey,
 ): Promise<string> {
@@ -433,10 +429,11 @@ async function fetchRemoteUsage(
 	}
 }
 
-function sourceErrors(config: Config, message: string): AccountUsage[] {
-	return (Object.keys(config.providers) as ProviderName[])
-		.filter((provider) => config.providers[provider])
-		.map((provider) => ({
+function sourceErrors(
+	providers: readonly ProviderName[],
+	message: string,
+): AccountUsage[] {
+	return providers.map((provider) => ({
 			provider,
 			label: "remote",
 			windows: [],
@@ -444,36 +441,51 @@ function sourceErrors(config: Config, message: string): AccountUsage[] {
 		}));
 }
 
-function managementErrorMessage(error: unknown): string {
+export function managementErrorMessage(
+	error: unknown,
+	mode: "refresh" | "setup" = "refresh",
+): string {
 	if (error instanceof ManagementHttpError) {
 		if (error.status === 401 || error.status === 403) {
-			return `management authentication failed (HTTP ${error.status}); run /cliproxy-usage setup`;
+			return mode === "setup"
+				? `Management password rejected (HTTP ${error.status}).`
+				: `management authentication failed (HTTP ${error.status}); run /cliproxy-usage setup`;
 		}
 		if (error.status === 404) {
-			return "Management API not found (HTTP 404); check CLIProxyAPI configuration or managementUrl";
+			return mode === "setup"
+				? "Management API not found (HTTP 404). Check CLIProxyAPI management configuration."
+				: "Management API not found (HTTP 404); check CLIProxyAPI configuration or managementUrl";
 		}
 	}
 	return error instanceof Error ? error.message : String(error);
 }
 
 export async function readAccounts(
-	config: Config,
+	config: Settings,
 	options: ReadAccountsOptions = {},
 ): Promise<AccountUsage[]> {
+	const requested = options.providers
+		? new Set(options.providers)
+		: undefined;
+	const selectedProviders = PROVIDERS.filter(
+		(provider) => config.providers[provider] && (!requested || requested.has(provider)),
+	);
+	if (!selectedProviders.length) return [];
+	const selectedProviderIds = new Set<ProviderName>(selectedProviders);
 	const source = await resolveManagementSource(
 		config,
 		options.providerConfigPath,
 	);
-	if (source.error) return sourceErrors(config, source.error);
+	if (source.error) return sourceErrors(selectedProviders, source.error);
 	if (!source.managementUrl) {
 		return sourceErrors(
-			config,
+			selectedProviders,
 			"CLIProxyAPI base URL not found; configure the provider or managementUrl",
 		);
 	}
 	if (!config.managementKey) {
 		return sourceErrors(
-			config,
+			selectedProviders,
 			"Management key is not configured; run /cliproxy-usage setup",
 		);
 	}
@@ -484,7 +496,7 @@ export async function readAccounts(
 		);
 		let deepSeekFiles: RemoteAuthFile[] = [];
 		let deepSeekDiscoveryError: AccountUsage | undefined;
-		if (config.providers.deepseek) {
+		if (selectedProviderIds.has("deepseek")) {
 			try {
 				deepSeekFiles = await readDeepSeekAuthFiles(
 					source.managementUrl,
@@ -506,7 +518,7 @@ export async function readAccounts(
 					Boolean(
 						entry.provider &&
 							!entry.auth.disabled &&
-							config.providers[entry.provider] &&
+							selectedProviderIds.has(entry.provider) &&
 							(entry.provider !== "deepseek" ||
 								deepSeekFiles.includes(entry.auth)),
 					),
@@ -537,6 +549,6 @@ export async function readAccounts(
 		) {
 			options.onManagementAuthFailure?.();
 		}
-		return sourceErrors(config, managementErrorMessage(error));
+		return sourceErrors(selectedProviders, managementErrorMessage(error));
 	}
 }

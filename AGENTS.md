@@ -9,6 +9,9 @@ Pi extension showing CLIProxyAPI account usage. Keep changes small, typed, and d
 - `index.ts`: Pi lifecycle and command wiring only.
 - `src/settings.ts`: persisted configuration.
 - `src/settings-ui.ts`: interactive TUI configuration.
+- `src/controller.ts`: refresh scheduling, provider caches, and UI orchestration.
+- `src/refresh.ts`: refresh request coalescing.
+- `src/providers.ts`: shared provider metadata.
 - `src/usage.ts`: account discovery and provider HTTP requests.
 - `src/parsers.ts`: pure provider response parsing.
 - `src/ui.ts`: formatting and widget rendering.

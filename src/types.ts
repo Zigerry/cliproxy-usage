@@ -15,8 +15,6 @@ export type Settings = {
 	providers: Record<ProviderName, boolean>;
 };
 
-export type Config = Settings;
-
 export type UsageWindow = {
 	/** Short window name shown in the widget, e.g. "5h", "7d", "Plan". */
 	label: string;
