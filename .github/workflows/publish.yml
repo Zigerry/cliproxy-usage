@@ -1,7 +1,6 @@
----
 name: Publish
 
-"on":
+on:
   workflow_dispatch:
     inputs:
       tag:

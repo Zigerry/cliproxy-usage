@@ -1,7 +1,6 @@
----
 name: Bump version
 
-"on":
+on:
   workflow_dispatch:
     inputs:
       version_bump:
