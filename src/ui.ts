@@ -1,3 +1,9 @@
+import {
+	sliceByColumn,
+	truncateToWidth,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
+import { PROVIDER_LABELS } from "./providers.js";
 import type {
 	AccountBalance,
 	AccountUsage,
@@ -8,18 +14,7 @@ import type {
 	UsageWindow,
 } from "./types.js";
 
-const PROVIDER_LABELS: Record<ProviderName, string> = {
-	claude: "Claude",
-	codex: "Codex",
-	deepseek: "DeepSeek",
-	grok: "Grok",
-	kimi: "Kimi",
-};
 const CLAUDE_ORANGE = "\u001b[38;5;208m";
-
-function accountLabel(label: string): string {
-	return label;
-}
 
 /** Remaining quota in percent, clamped to 0-100. */
 export function remainingPercent(window: UsageWindow): number {
@@ -42,6 +37,35 @@ export function usageBar(percent: number, width = 8): string {
 function formatWindow(window: UsageWindow): string {
 	const remaining = remainingPercent(window);
 	return `${window.label} ${usageBar(remaining)} left ${Math.round(remaining)}%`;
+}
+
+export function formatResetTime(resetsAt: Date, now = Date.now()): string {
+	const remainingMinutes = Math.max(
+		0,
+		Math.ceil((resetsAt.getTime() - now) / 60_000),
+	);
+	if (remainingMinutes === 0) return "reset due";
+	if (remainingMinutes < 60) return `resets in ${remainingMinutes}m`;
+	const hours = Math.floor(remainingMinutes / 60);
+	const minutes = remainingMinutes % 60;
+	if (hours < 48) {
+		return `resets in ${hours}h${minutes ? ` ${minutes}m` : ""}`;
+	}
+	const days = Math.floor(hours / 24);
+	const remainingHours = hours % 24;
+	return `resets in ${days}d${remainingHours ? ` ${remainingHours}h` : ""}`;
+}
+
+function formatDetailWindow(window: UsageWindow, now: number): string {
+	const reset = window.resetsAt ? ` · ${formatResetTime(window.resetsAt, now)}` : "";
+	return `${formatWindow(window)}${reset}`;
+}
+
+function fitLabel(text: string, width: number): string {
+	if (visibleWidth(text) <= width) return text;
+	const ellipsis = "…";
+	const contentWidth = Math.max(0, width - visibleWidth(ellipsis));
+	return `${sliceByColumn(text, 0, contentWidth, true)}${ellipsis}`;
 }
 
 export function formatBalanceAmount(value: BalanceAmount): string {
@@ -73,21 +97,7 @@ function itemPriority(item: AccountUsage): number {
 	return Math.max(-1, ...item.windows.map((window) => window.used));
 }
 
-export function formatCompact(items: AccountUsage[]): string {
-	return items
-		.map((item) => {
-			const identity = [PROVIDER_LABELS[item.provider], accountLabel(item.label)]
-				.filter(Boolean)
-				.join(" ");
-			if (item.error) return `${identity}: ! ${item.error}`;
-			if (item.balance) return `${identity}  ${formatBalance(item.balance) || "–"}`;
-			const windows = item.windows.map(formatWindow);
-			return `${identity}  ${windows.join("  ") || "–"}`;
-		})
-		.join("\n");
-}
-
-export function formatDetails(items: AccountUsage[]): string {
+export function formatDetails(items: AccountUsage[], now = Date.now()): string {
 	if (!items.length) return "No enabled CLIProxyAPI accounts found.";
 	return items
 		.map((item) => {
@@ -96,44 +106,12 @@ export function formatDetails(items: AccountUsage[]): string {
 			if (item.balance) {
 				return `${identity}: ${formatBalance(item.balance) || "No balance"}`;
 			}
-			const windows = item.windows.map(formatWindow);
+			const windows = item.windows.map((window) =>
+				formatDetailWindow(window, now),
+			);
 			return `${identity}: ${windows.join(" · ") || "No usage window"}`;
 		})
 		.join("\n");
-}
-
-function truncateAnsi(text: string, width: number): string {
-	let visible = 0;
-	let result = "";
-	for (let index = 0; index < text.length && visible < width; ) {
-		if (text[index] === "\u001b") {
-			const match = text.slice(index).match(/^\u001b\[[0-?]*[ -/]*[@-~]/);
-			if (match) {
-				result += match[0];
-				index += match[0].length;
-				continue;
-			}
-		}
-		const point = text.codePointAt(index);
-		if (point === undefined) break;
-		result += String.fromCodePoint(point);
-		index += point > 0xffff ? 2 : 1;
-		visible++;
-	}
-	return `${result}\u001b[0m`;
-}
-
-function ansiWidth(text: string): number {
-	return Array.from(
-		text.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, ""),
-	).length;
-}
-
-function fitPlain(text: string, width: number): string {
-	const points = Array.from(text);
-	if (points.length <= width) return text;
-	if (width <= 1) return "…".slice(0, width);
-	return `${points.slice(0, width - 1).join("")}…`;
 }
 
 export function clearUsage(ctx: UiContext): void {
@@ -146,7 +124,6 @@ export function renderUsage(
 	items: AccountUsage[],
 	maxVisibleAccounts: number,
 ): void {
-	ctx.ui.setStatus("cliproxy-usage", undefined);
 	if (!items.length) {
 		ctx.ui.setWidget("cliproxy-usage", undefined);
 		return;
@@ -185,10 +162,7 @@ export function renderUsage(
 						const paint = (color: string, text: string) =>
 							styled ? theme.fg(color, text) : text;
 						const separator = paint("dim", " │ ");
-						const account = paint(
-							"muted",
-							fitPlain(accountLabel(item.label), labelLimit),
-						);
+						const account = paint("muted", fitLabel(item.label, labelLimit));
 						const provider = styled
 							? styledProvider(item.provider, PROVIDER_LABELS[item.provider])
 							: PROVIDER_LABELS[item.provider];
@@ -226,14 +200,14 @@ export function renderUsage(
 								: paint("dim", "–");
 						}
 						const card = `${prefix}${content}`;
-						return truncateAnsi(card, Math.min(width, ansiWidth(card)));
+						return truncateToWidth(card, width, "");
 					});
 				const packCards = (cards: string[]): string[][] => {
 					const rows: string[][] = [];
 					let row: string[] = [];
 					let rowWidth = 0;
 					for (const card of cards) {
-						const cardWidth = ansiWidth(card);
+						const cardWidth = visibleWidth(card);
 						const nextWidth =
 							rowWidth + (row.length ? gap : 0) + cardWidth;
 						if (row.length && (row.length >= 3 || nextWidth > width)) {
@@ -268,12 +242,13 @@ export function renderUsage(
 					const count = items.length;
 					const kind = groupedProvider === "deepseek" ? "balance" : "quota";
 					lines.push(
-						truncateAnsi(
+						truncateToWidth(
 							`${styledProvider(groupedProvider, PROVIDER_LABELS[groupedProvider])} ${theme.fg(
 								"dim",
 								`${kind} · ${count} account${count === 1 ? "" : "s"}`,
 							)}`,
 							width,
+							"",
 						),
 					);
 				}
@@ -282,12 +257,13 @@ export function renderUsage(
 				}
 				if (hiddenCount) {
 					lines.push(
-						truncateAnsi(
+						truncateToWidth(
 							theme.fg(
 								"dim",
 								`… ${hiddenCount} more account${hiddenCount === 1 ? "" : "s"} · /cliproxy-usage for details`,
 							),
 							width,
+							"",
 						),
 					);
 				}

@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import {
 	formatBalanceAmount,
-	formatCompact,
 	formatDetails,
+	formatResetTime,
 	remainingColor,
 	remainingPercent,
 	renderUsage,
@@ -36,30 +37,6 @@ test("remaining quota and color thresholds follow the configured semantics", () 
 	assert.equal(remainingColor(29), "warning");
 	assert.equal(remainingColor(10), "warning");
 	assert.equal(remainingColor(9), "error");
-});
-
-test("formatCompact renders explicit window names, bars, and remaining quota", () => {
-	assert.equal(
-		formatCompact([
-			{
-				provider: "kimi",
-				label: "work",
-				windows: [
-					{ label: "7d", used: 50 },
-					{ label: "5h", used: 5 },
-				],
-			},
-			{
-				provider: "codex",
-				label: "plus",
-				windows: [{ label: "7d", used: 31 }],
-			},
-		]),
-		[
-			"Kimi work  7d ━━━━──── left 50%  5h ━━━━━━━━ left 95%",
-			"Codex plus  7d ━━━━━━── left 69%",
-		].join("\n"),
-	);
 });
 
 function createContext() {
@@ -115,7 +92,7 @@ test("renderUsage shows DeepSeek as an amount-only card", () => {
 		],
 		4,
 	);
-	assert.equal(render()[0], "DeepSeek │ ¥42.50\u001b[0m");
+	assert.equal(render()[0], "DeepSeek │ ¥42.50");
 });
 
 test("renderUsage prioritizes the lowest DeepSeek balances", () => {
@@ -177,7 +154,7 @@ test("renderUsage keeps seven-day before five-hour and colors remaining quota", 
 	);
 	assert.equal(
 		render()[0],
-		"Kimi │ account │ 7d ━━━━──── left 50% │ 5h ━━━━━━━━ left 95%\u001b[0m",
+		"Kimi │ account │ 7d ━━━━──── left 50% │ 5h ━━━━━━━━ left 95%",
 	);
 	assert.equal(colors.filter((color) => color === "success").length, 4);
 });
@@ -256,6 +233,23 @@ test("renderUsage switches between three, two, and one account columns", () => {
 	assert.equal(narrow.length, 4);
 });
 
+test("renderUsage respects terminal width for wide account labels", () => {
+	const { ctx, render } = createContext();
+	renderUsage(
+		ctx,
+		[
+			{
+				provider: "codex",
+				label: "中文账户名称很长",
+				windows: [{ label: "7d", used: 50 }],
+			},
+		],
+		4,
+	);
+	const lines = render(30);
+	assert.ok(lines.every((line) => visibleWidth(line) <= 30));
+});
+
 test("renderUsage limits rows and prioritizes errors then highest usage", () => {
 	const { ctx, render } = createContext();
 	renderUsage(
@@ -281,26 +275,44 @@ test("renderUsage limits rows and prioritizes errors then highest usage", () => 
 	assert.match(lines[0] ?? "", /high/);
 	assert.equal(
 		lines[1],
-		"… 1 more account · /cliproxy-usage for details\u001b[0m",
+		"… 1 more account · /cliproxy-usage for details",
 	);
 });
 
-test("formatCompact handles balances, errors, and missing windows", () => {
+test("formatResetTime renders concise reset countdowns", () => {
+	const now = Date.UTC(2030, 0, 1, 0, 0, 0);
+	assert.equal(formatResetTime(new Date(now), now), "reset due");
+	assert.equal(formatResetTime(new Date(now + 42 * 60_000), now), "resets in 42m");
 	assert.equal(
-		formatCompact([
-			{
-				provider: "deepseek",
-				label: "",
-				windows: [],
-				balance: {
-					available: true,
-					amounts: [{ currency: "CNY", amount: 42.5 }],
+		formatResetTime(new Date(now + (2 * 60 + 18) * 60_000), now),
+		"resets in 2h 18m",
+	);
+	assert.equal(
+		formatResetTime(new Date(now + 3 * 24 * 60 * 60_000), now),
+		"resets in 3d",
+	);
+});
+
+test("formatDetails includes reset countdowns when available", () => {
+	const now = Date.UTC(2030, 0, 1, 0, 0, 0);
+	assert.equal(
+		formatDetails(
+			[
+				{
+					provider: "codex",
+					label: "work",
+					windows: [
+						{
+							label: "7d",
+							used: 25,
+							resetsAt: new Date(now + (2 * 60 + 18) * 60_000),
+						},
+					],
 				},
-			},
-			{ provider: "grok", label: "x", windows: [], error: "HTTP 401" },
-			{ provider: "codex", label: "empty", windows: [] },
-		]),
-		"DeepSeek  ¥42.50\nGrok x: ! HTTP 401\nCodex empty  –",
+			],
+			now,
+		),
+		"codex/work: 7d ━━━━━━── left 75% · resets in 2h 18m",
 	);
 });
 

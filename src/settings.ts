@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { PROVIDERS } from "./providers.js";
 import type { Settings } from "./types.js";
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -70,13 +71,7 @@ export function normalizeSettings(value: unknown): {
 	} else if (value.maxVisibleAccounts !== undefined) {
 		warnings.push("ignored invalid maxVisibleAccounts");
 	}
-	for (const provider of [
-		"claude",
-		"codex",
-		"deepseek",
-		"grok",
-		"kimi",
-	] as const) {
+	for (const provider of PROVIDERS) {
 		if (typeof providers[provider] === "boolean") {
 			settings.providers[provider] = providers[provider];
 		} else if (providers[provider] !== undefined) {

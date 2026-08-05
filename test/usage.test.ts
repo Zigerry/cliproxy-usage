@@ -10,9 +10,9 @@ import {
 	resolveManagementSource,
 	validateManagementAccess,
 } from "../src/usage.js";
-import type { AccountUsage, Config } from "../src/types.js";
+import type { AccountUsage, Settings } from "../src/types.js";
 
-const config = (): Config => ({
+const config = (): Settings => ({
 	managementUrl: "",
 	managementKey: "",
 	refreshMinutes: 5,
@@ -117,7 +117,6 @@ test("readAccounts queries provider quota through the remote Management API", as
 		);
 		const value = config();
 		value.managementKey = "management-secret";
-		value.providers.deepseek = false;
 		const requests: Array<{ url: string; authorization: string; body?: unknown }> = [];
 		globalThis.fetch = async (input, init) => {
 			const url = String(input);
@@ -158,7 +157,10 @@ test("readAccounts queries provider quota through the remote Management API", as
 		};
 
 		assert.deepEqual(
-			await readAccounts(value, { providerConfigPath }),
+			await readAccounts(value, {
+				providerConfigPath,
+				providers: ["codex"],
+			}),
 			[
 				{
 					provider: "codex",
@@ -285,6 +287,19 @@ test("readAccounts reports setup instructions when the management key is missing
 	assert.deepEqual(accountsForModel(items, "cliproxyapi", "gpt-5"), [
 		{
 			provider: "codex",
+			label: "remote",
+			windows: [],
+			error: "Management key is not configured; run /cliproxy-usage setup",
+		},
+	]);
+});
+
+test("readAccounts scopes discovery errors to requested providers", async () => {
+	const value = config();
+	value.managementUrl = "https://proxy.example.com";
+	assert.deepEqual(await readAccounts(value, { providers: ["kimi"] }), [
+		{
+			provider: "kimi",
 			label: "remote",
 			windows: [],
 			error: "Management key is not configured; run /cliproxy-usage setup",
