@@ -56,6 +56,7 @@ export type ReadAccountsOptions = {
 	providerConfigPath?: string;
 	providers?: readonly ProviderName[];
 	onManagementAuthFailure?: () => void;
+	onProviderFailure?: (provider: ProviderName, message: string) => void;
 };
 
 const USAGE_URLS = {
@@ -432,13 +433,17 @@ async function fetchRemoteUsage(
 function sourceErrors(
 	providers: readonly ProviderName[],
 	message: string,
+	onProviderFailure?: (provider: ProviderName, message: string) => void,
 ): AccountUsage[] {
-	return providers.map((provider) => ({
+	return providers.map((provider) => {
+		onProviderFailure?.(provider, message);
+		return {
 			provider,
 			label: "remote",
 			windows: [],
 			error: message,
-		}));
+		};
+	});
 }
 
 export function managementErrorMessage(
@@ -476,17 +481,25 @@ export async function readAccounts(
 		config,
 		options.providerConfigPath,
 	);
-	if (source.error) return sourceErrors(selectedProviders, source.error);
+	if (source.error) {
+		return sourceErrors(
+			selectedProviders,
+			source.error,
+			options.onProviderFailure,
+		);
+	}
 	if (!source.managementUrl) {
 		return sourceErrors(
 			selectedProviders,
 			"CLIProxyAPI base URL not found; configure the provider or managementUrl",
+			options.onProviderFailure,
 		);
 	}
 	if (!config.managementKey) {
 		return sourceErrors(
 			selectedProviders,
 			"Management key is not configured; run /cliproxy-usage setup",
+			options.onProviderFailure,
 		);
 	}
 	try {
@@ -503,11 +516,13 @@ export async function readAccounts(
 					config.managementKey,
 				);
 			} catch (error) {
+				const message = managementErrorMessage(error);
+				options.onProviderFailure?.("deepseek", message);
 				deepSeekDiscoveryError = {
 					provider: "deepseek",
 					label: "remote",
 					windows: [],
-					error: managementErrorMessage(error),
+					error: message,
 				};
 			}
 		}
@@ -549,6 +564,10 @@ export async function readAccounts(
 		) {
 			options.onManagementAuthFailure?.();
 		}
-		return sourceErrors(selectedProviders, managementErrorMessage(error));
+		return sourceErrors(
+			selectedProviders,
+			managementErrorMessage(error),
+			options.onProviderFailure,
+		);
 	}
 }

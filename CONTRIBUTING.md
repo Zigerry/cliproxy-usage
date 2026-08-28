@@ -15,7 +15,7 @@ npm install
 Run extension locally:
 
 ```bash
-pi -e ./index.ts
+pi --no-extensions -e ./index.ts
 ```
 
 ## Development

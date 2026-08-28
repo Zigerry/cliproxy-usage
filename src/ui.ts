@@ -22,7 +22,9 @@ export function remainingPercent(window: UsageWindow): number {
 }
 
 /** Color by remaining quota: green normally, yellow below 30%, red below 10%. */
-export function remainingColor(remaining: number): string {
+export function remainingColor(
+	remaining: number,
+): "error" | "warning" | "success" {
 	if (remaining < 10) return "error";
 	if (remaining < 30) return "warning";
 	return "success";
@@ -84,7 +86,7 @@ export function formatBalanceAmount(value: BalanceAmount): string {
 		: `${amount} ${currency}`;
 }
 
-function formatBalance(balance: AccountBalance): string {
+export function formatBalance(balance: AccountBalance): string {
 	return balance.amounts.map(formatBalanceAmount).join(" / ");
 }
 

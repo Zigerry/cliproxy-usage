@@ -14,7 +14,8 @@ Pi extension showing CLIProxyAPI account usage. Keep changes small, typed, and d
 - `src/providers.ts`: shared provider metadata.
 - `src/usage.ts`: account discovery and provider HTTP requests.
 - `src/parsers.ts`: pure provider response parsing.
-- `src/ui.ts`: formatting and widget rendering.
+- `src/ui.ts`: shared formatting and compact widget rendering.
+- `src/details-ui.ts`: interactive cache-backed usage details TUI.
 - `src/types.ts`: shared types.
 - `test/`: TypeScript tests using `node:test`.
 
@@ -26,7 +27,7 @@ Preserve these boundaries. Put pure logic outside `index.ts` and cover it with f
 npm install
 npm test
 npm run check
-pi -e ./index.ts
+pi --no-extensions -e ./index.ts
 npm pack --dry-run
 ```
 
@@ -69,5 +70,7 @@ Use `!` and a `BREAKING CHANGE:` footer only for actual breaking changes.
 - Configuration path: `~/.pi/agent/pi-cliproxy-usage.json` (legacy extension config migrates automatically).
 - Keep `/cliproxy-usage` as command entry point; use subcommands for additional actions.
 - Keep provider quota windows explicit (`7d`, `5h`, etc.); never infer a session from Codex primary/secondary slot position.
-- Widget quota bars and colors represent remaining quota, not consumed quota.
-- Scope the widget to the active Pi model's matching OAuth account provider.
+- Widget and details quota bars and colors represent remaining quota, not consumed quota.
+- Scope both the widget and details TUI to the active Pi model's matching account provider.
+- Route details refreshes through `UsageController` and `CoalescingAsyncQueue`; never issue provider requests directly from the TUI.
+- Keep usage and balance caches session-only. Do not persist them to disk.

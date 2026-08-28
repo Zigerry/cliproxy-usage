@@ -181,7 +181,7 @@ export default function (pi: ExtensionAPI) {
 		},
 		handler: async (args, ctx) => {
 			const action = args.trim().toLowerCase();
-			if (!action) return usage.refreshCurrent(ctx, { notify: true });
+			if (!action) return usage.showDetails(ctx);
 			if (action === "setup" || action === "login") {
 				return setupManagement(ctx);
 			}

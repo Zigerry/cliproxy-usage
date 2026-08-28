@@ -1,4 +1,8 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionCommandContext,
+	ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import { UsageDetailsComponent } from "./details-ui.js";
 import { PROVIDERS, PROVIDER_LABELS } from "./providers.js";
 import { CoalescingAsyncQueue } from "./refresh.js";
 import {
@@ -37,6 +41,9 @@ export class UsageController {
 	private latestItems: AccountUsage[] = [];
 	private fetchedProviders = new Set<ProviderName>();
 	private lastUpdated = new Map<ProviderName, Date>();
+	private lastRefreshErrors = new Map<ProviderName, string>();
+	private refreshingProviders = new Map<ProviderName, number>();
+	private readonly changeListeners = new Set<() => void>();
 	private maxVisibleAccounts = DEFAULT_SETTINGS.maxVisibleAccounts;
 	private settingsSnapshot: Settings = structuredClone(DEFAULT_SETTINGS);
 	private rejectedManagementKey: string | undefined;
@@ -82,6 +89,94 @@ export class UsageController {
 		);
 	}
 
+	private providerIsRefreshing(provider: ProviderName): boolean {
+		return (this.refreshingProviders.get(provider) ?? 0) > 0;
+	}
+
+	private providerIsStale(provider: ProviderName): boolean {
+		if (!this.fetchedProviders.has(provider)) return true;
+		const updatedAt = this.lastUpdated.get(provider)?.getTime() ?? 0;
+		return (
+			Date.now() - updatedAt >=
+			this.settingsSnapshot.refreshMinutes * 60_000
+		);
+	}
+
+	private emitChange(): void {
+		for (const listener of this.changeListeners) listener();
+	}
+
+	private subscribe(listener: () => void): () => void {
+		this.changeListeners.add(listener);
+		return () => this.changeListeners.delete(listener);
+	}
+
+	private replaceProviderItems(
+		provider: ProviderName,
+		items: AccountUsage[],
+	): void {
+		this.latestItems = this.latestItems.filter(
+			(item) => item.provider !== provider,
+		);
+		this.latestItems.push(...items);
+	}
+
+	private mergeFailedAccountItems(
+		provider: ProviderName,
+		items: AccountUsage[],
+	): AccountUsage[] {
+		const cachedByLabel = new Map<string, AccountUsage[]>();
+		for (const item of this.itemsForProvider(provider)) {
+			if (item.error) continue;
+			const matches = cachedByLabel.get(item.label) ?? [];
+			matches.push(item);
+			cachedByLabel.set(item.label, matches);
+		}
+		return items.map((item) => {
+			if (!item.error) return item;
+			const matches = cachedByLabel.get(item.label);
+			return matches?.shift() ?? item;
+		});
+	}
+
+	private recordProviderFailure(
+		provider: ProviderName,
+		message: string,
+		items: AccountUsage[] = [],
+	): void {
+		this.lastRefreshErrors.set(provider, message);
+		if (!this.fetchedProviders.has(provider)) {
+			this.replaceProviderItems(
+				provider,
+				items.length
+					? items
+					: [{ provider, label: "remote", windows: [], error: message }],
+			);
+		}
+	}
+
+	private requestRefresh(request: RefreshRequest): Promise<void> {
+		for (const provider of request.providers) {
+			this.refreshingProviders.set(
+				provider,
+				(this.refreshingProviders.get(provider) ?? 0) + 1,
+			);
+		}
+		this.emitChange();
+		return this.refreshQueue.request(request).finally(() => {
+			for (const provider of request.providers) {
+				const remaining =
+					(this.refreshingProviders.get(provider) ?? 1) - 1;
+				if (remaining > 0) {
+					this.refreshingProviders.set(provider, remaining);
+				} else {
+					this.refreshingProviders.delete(provider);
+				}
+			}
+			this.emitChange();
+		});
+	}
+
 	renderCurrentModel(ctx: ExtensionContext): void {
 		renderUsage(
 			ctx,
@@ -96,12 +191,14 @@ export class UsageController {
 		);
 		this.fetchedProviders.delete(provider);
 		this.lastUpdated.delete(provider);
+		this.lastRefreshErrors.delete(provider);
 	}
 
 	private clearAllCaches(): void {
 		this.latestItems = [];
 		this.fetchedProviders = new Set<ProviderName>();
 		this.lastUpdated = new Map<ProviderName, Date>();
+		this.lastRefreshErrors = new Map<ProviderName, string>();
 	}
 
 	private notifySettingsWarnings(
@@ -137,6 +234,17 @@ export class UsageController {
 			);
 			return;
 		}
+		const items = this.itemsForProvider(provider);
+		const refreshError = this.lastRefreshErrors.get(provider);
+		if (refreshError) {
+			ctx.ui.notify(
+				items.length && this.fetchedProviders.has(provider)
+					? `${formatDetails(items)}\nRefresh failed: ${refreshError}`
+					: `Failed to refresh ${label} usage: ${refreshError}`,
+				"warning",
+			);
+			return;
+		}
 		if (!this.fetchedProviders.has(provider)) {
 			ctx.ui.notify(
 				`No cached ${label} usage. Run /cliproxy-usage to refresh.`,
@@ -144,7 +252,6 @@ export class UsageController {
 			);
 			return;
 		}
-		const items = this.itemsForProvider(provider);
 		if (!items.length) {
 			ctx.ui.notify(`No ${label} CLIProxyAPI accounts found.`, "info");
 			return;
@@ -166,9 +273,14 @@ export class UsageController {
 					this.paths.legacySettingsPath,
 				));
 		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			for (const provider of request.providers) {
+				this.recordProviderFailure(provider, message);
+			}
+			this.emitChange();
 			if (request.ctx.hasUI) {
 				request.ctx.ui.notify(
-					`Failed to load CLIProxyAPI usage settings: ${error instanceof Error ? error.message : String(error)}`,
+					`Failed to load CLIProxyAPI usage settings: ${message}`,
 					"error",
 				);
 			}
@@ -193,21 +305,14 @@ export class UsageController {
 			loaded.settings.managementKey &&
 			this.rejectedManagementKey === loaded.settings.managementKey
 		) {
+			const message =
+				this.rejectedManagementError ||
+				"management authentication failed; run /cliproxy-usage setup";
 			for (const provider of enabledProviders) {
-				this.latestItems = this.latestItems.filter(
-					(item) => item.provider !== provider,
-				);
-				this.latestItems.push({
-					provider,
-					label: "remote",
-					windows: [],
-					error:
-						this.rejectedManagementError ||
-						"management authentication failed; run /cliproxy-usage setup",
-				});
-				this.fetchedProviders.add(provider);
+				this.recordProviderFailure(provider, message);
 			}
 			this.renderCurrentModel(request.ctx);
+			this.emitChange();
 			return;
 		}
 
@@ -219,6 +324,7 @@ export class UsageController {
 		}
 		try {
 			let managementAuthFailed = false;
+			const providerFailures = new Map<ProviderName, string>();
 			const results = enabledProviders.length
 				? await readAccounts(loaded.settings, {
 						providerConfigPath: this.paths.providerConfigPath,
@@ -226,18 +332,50 @@ export class UsageController {
 						onManagementAuthFailure: () => {
 							managementAuthFailed = true;
 						},
+						onProviderFailure: (provider, message) => {
+							providerFailures.set(provider, message);
+						},
 					})
 				: [];
 			if (!this.active) return;
 			for (const provider of enabledProviders) {
-				this.latestItems = this.latestItems.filter(
-					(item) => item.provider !== provider,
+				const providerItems = results.filter(
+					(item) => item.provider === provider,
 				);
-				this.latestItems.push(
-					...results.filter((item) => item.provider === provider),
+				const failedItems = providerItems.filter(
+					(item): item is AccountUsage & { error: string } =>
+						Boolean(item.error),
+				);
+				const allAccountsFailed =
+					providerItems.length > 0 &&
+					failedItems.length === providerItems.length;
+				const providerFailure = providerFailures.get(provider);
+				const failure = providerFailure
+					? providerFailure
+					: [
+							...new Set(
+								failedItems.map(
+									(item) => `${item.label}: ${item.error}`,
+								),
+							),
+						].join("; ");
+				if ((providerFailures.has(provider) && !providerItems.length) || allAccountsFailed) {
+					this.recordProviderFailure(provider, failure, providerItems);
+					continue;
+				}
+				this.replaceProviderItems(
+					provider,
+					failedItems.length
+						? this.mergeFailedAccountItems(provider, providerItems)
+						: providerItems,
 				);
 				this.fetchedProviders.add(provider);
 				this.lastUpdated.set(provider, new Date());
+				if (failure) {
+					this.lastRefreshErrors.set(provider, failure);
+				} else {
+					this.lastRefreshErrors.delete(provider);
+				}
 			}
 			this.rejectedManagementKey = managementAuthFailed
 				? loaded.settings.managementKey
@@ -246,13 +384,20 @@ export class UsageController {
 				? results.find((item) => item.error)?.error
 				: undefined;
 			this.renderCurrentModel(request.ctx);
+			this.emitChange();
 			for (const provider of request.notifyProviders) {
 				this.notifyProviderState(request.ctx, provider);
 			}
 		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			for (const provider of enabledProviders) {
+				this.recordProviderFailure(provider, message);
+			}
+			this.renderCurrentModel(request.ctx);
+			this.emitChange();
 			if (request.ctx.hasUI) {
 				request.ctx.ui.notify(
-					`Failed to refresh CLIProxyAPI usage: ${error instanceof Error ? error.message : String(error)}`,
+					`Failed to refresh CLIProxyAPI usage: ${message}`,
 					"error",
 				);
 			}
@@ -288,7 +433,7 @@ export class UsageController {
 		const provider = this.providerForContext(ctx);
 		if (!provider) {
 			if (options.loaded) {
-				return this.refreshQueue.request({
+				return this.requestRefresh({
 					ctx,
 					providers: [],
 					notifyProviders: [],
@@ -307,13 +452,98 @@ export class UsageController {
 			this.renderCurrentModel(ctx);
 			return Promise.resolve();
 		}
-		return this.refreshQueue.request({
+		return this.requestRefresh({
 			ctx,
 			providers: [provider],
 			notifyProviders: options.notify ? [provider] : [],
 			force: Boolean(options.force),
 			loaded: options.loaded,
 		});
+	}
+
+	async showDetails(ctx: ExtensionCommandContext): Promise<void> {
+		const provider = this.providerForContext(ctx);
+		if (!provider) {
+			ctx.ui.notify(
+				ctx.model
+					? `${this.modelDescription(ctx)} has no supported CLIProxyAPI usage source.`
+					: "No active Pi model is selected.",
+				"info",
+			);
+			this.renderCurrentModel(ctx);
+			return;
+		}
+		if (!this.settingsSnapshot.providers[provider]) {
+			ctx.ui.notify(
+				`${PROVIDER_LABELS[provider]} usage is disabled. Enable it in /cliproxy-usage settings.`,
+				"warning",
+			);
+			return;
+		}
+		if (ctx.mode !== "tui") {
+			await this.refreshCurrent(ctx, { notify: true });
+			return;
+		}
+
+		await ctx.ui.custom<void>(
+			(tui, theme, _keybindings, done) => {
+				let closed = false;
+				let unsubscribe = () => {};
+				const close = () => {
+					if (closed) return;
+					closed = true;
+					done();
+				};
+				const component = new UsageDetailsComponent(tui, theme, {
+					getItems: () => {
+						const items = this.itemsForProvider(provider);
+						const error = this.lastRefreshErrors.get(provider);
+						return !this.fetchedProviders.has(provider) &&
+							error &&
+							items.every((item) => item.error)
+							? []
+							: items;
+					},
+					hasFetched: () => this.fetchedProviders.has(provider),
+					isRefreshing: () => this.providerIsRefreshing(provider),
+					getError: () => this.lastRefreshErrors.get(provider),
+					onRefresh: () => {
+						this.reportBackgroundError(
+							ctx,
+							this.refreshCurrent(ctx, { force: true }),
+						);
+					},
+					onClose: close,
+					onDispose: () => {
+						closed = true;
+						unsubscribe();
+					},
+				});
+				unsubscribe = this.subscribe(() => {
+					component.invalidate();
+					tui.requestRender();
+				});
+				queueMicrotask(() => {
+					if (
+						!closed &&
+						this.active &&
+						this.providerIsStale(provider) &&
+						!this.providerIsRefreshing(provider)
+					) {
+						this.reportBackgroundError(ctx, this.refreshCurrent(ctx));
+					}
+				});
+				return component;
+			},
+			{
+				overlay: true,
+				overlayOptions: {
+					anchor: "center",
+					width: 80,
+					maxHeight: "100%",
+				},
+			},
+		);
 	}
 
 	private scheduleRefresh(ctx: ExtensionContext, minutes: number): void {
@@ -353,15 +583,13 @@ export class UsageController {
 			this.maxVisibleAccounts,
 		);
 		if (!provider || !this.settingsSnapshot.providers[provider]) return;
-		const updatedAt = this.lastUpdated.get(provider)?.getTime() ?? 0;
-		const staleAfter = this.settingsSnapshot.refreshMinutes * 60_000;
 		if (
-			!this.fetchedProviders.has(provider) ||
-			Date.now() - updatedAt >= staleAfter
+			this.providerIsStale(provider) &&
+			!this.providerIsRefreshing(provider)
 		) {
 			this.reportBackgroundError(
 				ctx,
-				this.refreshQueue.request({
+				this.requestRefresh({
 					ctx,
 					providers: [provider],
 					notifyProviders: [],
