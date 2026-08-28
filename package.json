@@ -1,6 +1,6 @@
 {
   "name": "cliproxy-usage",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "CLIProxyAPI quota widget and interactive usage details for Pi Coding Agent",
   "type": "module",
   "keywords": [
