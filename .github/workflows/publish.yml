@@ -35,6 +35,7 @@ jobs:
       - run: npm test
       - name: Publish package
         env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
         run: |
           package="$(npm pkg get name | tr -d '\"')"
