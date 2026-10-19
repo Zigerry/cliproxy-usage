@@ -82,6 +82,7 @@ function cloneProvider(previous: ProviderUsageState | undefined, provider: Provi
 		accounts: previous.accounts.map((account) => cloneAccount(account, redactions)),
 		lastAttemptAt: previous.lastAttemptAt,
 		lastCompleteSuccessAt: previous.lastCompleteSuccessAt,
+		...(previous.retry ? { retry: { ...previous.retry } } : {}),
 		...(previous.discovery ? { discovery: {
 			result: previous.discovery.result, at: previous.discovery.at,
 			...(previous.discovery.error !== undefined ? { error: safeUsageText(previous.discovery.error, redactions) } : {}),
@@ -98,6 +99,9 @@ export function beginProviderRead(previous: ProviderUsageState | undefined, prov
 export function applyProviderRead(previous: ProviderUsageState | undefined, result: ProviderReadResult,
 	timing: { attemptedAt: number; completedAt: number }, redactions: readonly string[] = []): ProviderUsageState {
 	const record = cloneProvider(previous, result.provider, redactions);
+	// A shared source constraint can skip discovery before any provider work.
+	// It is an eligibility fact, not a new discovery or account query outcome.
+	if (result.discovery === "failure" && result.attempted === false) return record;
 	record.lastAttemptAt = timing.attemptedAt;
 	if (result.discovery === "failure") {
 		record.discovery = { result: "error", at: timing.completedAt, error: safeUsageText(result.error, redactions) };

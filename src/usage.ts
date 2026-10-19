@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { abortable } from "./abort.js";
+import { httpFailure, parseRetryAfter, RequestError, retryAfterFromRemoteHeaders } from "./http.js";
 import {
 	parseClaude,
 	parseCodex,
@@ -15,6 +16,7 @@ import type {
 	ProviderName,
 	ProviderReadResult,
 	ReadAccountsResult,
+	RequestFailure,
 	Settings,
 } from "./types.js";
 
@@ -36,7 +38,7 @@ type UsageResponse = { body: unknown; headers: Headers };
 
 type RemoteApiCallResponse = {
 	status_code?: number;
-	header?: Record<string, string | string[]>;
+	header?: unknown;
 	body?: unknown;
 };
 
@@ -62,12 +64,13 @@ const USAGE_URLS = {
 	kimi: "https://api.kimi.com/coding/v1/usages",
 } as const;
 
-export class ManagementHttpError extends Error {
+export class ManagementHttpError extends RequestError {
 	constructor(
 		public readonly status: number,
 		message = `management HTTP ${status}`,
+		retryAfterAt?: number,
 	) {
-		super(message);
+		super(httpFailure("management", status, retryAfterAt), message);
 		this.name = "ManagementHttpError";
 	}
 }
@@ -237,25 +240,33 @@ function managementEndpoint(baseUrl: string, path: string): string {
 	return `${baseUrl}/v0/management${path}`;
 }
 
-/** A request's headers and JSON body share the same timeout budget. */
-async function managementRequest(
+type ManagementReport = (failure?: RequestFailure) => void;
+
+function invalidResponse(scope: RequestFailure["scope"], message: string): RequestError {
+	return new RequestError({ scope, category: "invalid-response" }, message);
+}
+
+/** A request's headers, JSON and validation share one budget and completion report. */
+async function managementRequest<T = unknown>(
 	baseUrl: string,
 	managementKey: string,
 	path: string,
 	init: RequestInit = {},
 	parent?: AbortSignal,
-): Promise<unknown> {
+	report?: ManagementReport,
+	decode: (value: unknown) => T = (value) => value as T,
+): Promise<T> {
 	parent?.throwIfAborted();
 	const signal = AbortSignal.any([
 		...(parent ? [parent] : []),
 		AbortSignal.timeout(10_000),
 	]);
-	signal.throwIfAborted();
 	const headers = new Headers(init.headers);
 	headers.set("Authorization", `Bearer ${managementKey}`);
 	headers.set("Accept", "application/json");
 	headers.set("User-Agent", "pi-cliproxy-usage");
 	try {
+		signal.throwIfAborted();
 		const response = await abortable(fetch(managementEndpoint(baseUrl, path), {
 			...init,
 			headers,
@@ -264,18 +275,27 @@ async function managementRequest(
 		parent?.throwIfAborted();
 		signal.throwIfAborted();
 		if (!response.ok) {
+			const retryAfterAt = parseRetryAfter(response.headers.get("retry-after"), Date.now());
 			void response.body?.cancel().catch(() => {});
-			throw new ManagementHttpError(response.status);
+			throw new ManagementHttpError(response.status, undefined, retryAfterAt);
 		}
 		const value: unknown = await abortable(response.json(), signal);
 		parent?.throwIfAborted();
 		signal.throwIfAborted();
-		return value;
-	} catch (error) {
-		// Parent cancellation is operation control, not a provider failure/timeout.
+		const decoded = decode(value);
 		parent?.throwIfAborted();
-		if (error instanceof SyntaxError) throw new Error("invalid management JSON response");
-		throw error;
+		report?.();
+		return decoded;
+	} catch (error) {
+		// Cancellation is operation control: never report it as a completed request.
+		parent?.throwIfAborted();
+		const timeout = (error instanceof Error && error.name === "TimeoutError") || signal.aborted;
+		const failure = error instanceof RequestError ? error : error instanceof SyntaxError
+			? invalidResponse("management", "invalid management JSON response")
+			: new RequestError({ scope: "management", category: timeout ? "timeout" : "network" },
+				timeout ? "management request timed out" : "management request failed");
+		report?.(failure.failure);
+		throw failure;
 	}
 }
 
@@ -287,35 +307,33 @@ function accountId(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-function isManagementAuthFailure(error: unknown): error is ManagementHttpError {
-	return error instanceof ManagementHttpError && (error.status === 401 || error.status === 403);
-}
-
 async function readAuthFiles(
 	baseUrl: string,
 	managementKey: string,
 	signal?: AbortSignal,
+	report?: ManagementReport,
 ): Promise<RemoteAuthFile[]> {
-	const value = await managementRequest(baseUrl, managementKey, "/auth-files", {}, signal);
-	const invalid = () => new Error("invalid management auth-files response");
-	if (!record(value) || !Array.isArray(value.files)) throw invalid();
-	const files: RemoteAuthFile[] = [];
-	for (const item of value.files) {
-		if (!record(item)) throw invalid();
-		if (item.disabled === true) continue;
-		for (const key of ["provider", "name", "label", "email", "account_type", "account_id", "status", "status_message"]) {
-			if (item[key] !== undefined && typeof item[key] !== "string") throw invalid();
+	return managementRequest(baseUrl, managementKey, "/auth-files", {}, signal, report, (value) => {
+		const invalid = () => invalidResponse("management", "invalid management auth-files response");
+		if (!record(value) || !Array.isArray(value.files)) throw invalid();
+		const files: RemoteAuthFile[] = [];
+		for (const item of value.files) {
+			if (!record(item)) throw invalid();
+			if (item.disabled === true) continue;
+			for (const key of ["provider", "name", "label", "email", "account_type", "account_id", "status", "status_message"]) {
+				if (item[key] !== undefined && typeof item[key] !== "string") throw invalid();
+			}
+			for (const key of ["disabled", "unavailable"]) {
+				if (item[key] !== undefined && typeof item[key] !== "boolean") throw invalid();
+			}
+			if (![item.provider, item.account_type, item.label, item.name].some(
+				(field) => typeof field === "string" && field.trim(),
+			)) throw invalid();
+			// An invalid/missing auth_index is still a discovered account, never a selector.
+			files.push(item as RemoteAuthFile);
 		}
-		for (const key of ["disabled", "unavailable"]) {
-			if (item[key] !== undefined && typeof item[key] !== "boolean") throw invalid();
-		}
-		if (![item.provider, item.account_type, item.label, item.name].some(
-			(field) => typeof field === "string" && field.trim(),
-		)) throw invalid();
-		// An invalid/missing auth_index is still a discovered account, never a selector.
-		files.push(item as RemoteAuthFile);
-	}
-	return files;
+		return files;
+	});
 }
 
 function isOfficialDeepSeekUrl(value: string): boolean {
@@ -330,48 +348,50 @@ async function readDeepSeekAuthFiles(
 	baseUrl: string,
 	managementKey: string,
 	signal?: AbortSignal,
+	report?: ManagementReport,
 ): Promise<RemoteAuthFile[]> {
-	const value = await managementRequest(baseUrl, managementKey, "/openai-compatibility", {}, signal);
-	const invalid = () => new Error("invalid management openai-compatibility response");
-	if (!record(value) || !Array.isArray(value["openai-compatibility"])) throw invalid();
-	const files: RemoteAuthFile[] = [];
-	for (const item of value["openai-compatibility"]) {
-		if (!record(item)) throw invalid();
-		if (item.disabled === true) continue;
-		if ((item.disabled !== undefined && typeof item.disabled !== "boolean") ||
-			typeof item["base-url"] !== "string" || !item["base-url"].trim()) throw invalid();
-		if (!isOfficialDeepSeekUrl(item["base-url"])) continue;
-		if (item.name !== undefined && typeof item.name !== "string") throw invalid();
-		const label = item.name || "DeepSeek";
-		const indexes: unknown[] = [];
-		if (Object.hasOwn(item, "auth-index")) indexes.push(item["auth-index"]);
-		if (Object.hasOwn(item, "api-key-entries")) {
-			if (!Array.isArray(item["api-key-entries"])) throw invalid();
-			for (const entry of item["api-key-entries"]) {
-				if (!record(entry)) throw invalid();
-				indexes.push(entry["auth-index"]);
+	return managementRequest(baseUrl, managementKey, "/openai-compatibility", {}, signal, report, (value) => {
+		const invalid = () => invalidResponse("management", "invalid management openai-compatibility response");
+		if (!record(value) || !Array.isArray(value["openai-compatibility"])) throw invalid();
+		const files: RemoteAuthFile[] = [];
+		for (const item of value["openai-compatibility"]) {
+			if (!record(item)) throw invalid();
+			if (item.disabled === true) continue;
+			if ((item.disabled !== undefined && typeof item.disabled !== "boolean") ||
+				typeof item["base-url"] !== "string" || !item["base-url"].trim()) throw invalid();
+			if (!isOfficialDeepSeekUrl(item["base-url"])) continue;
+			if (item.name !== undefined && typeof item.name !== "string") throw invalid();
+			const label = item.name || "DeepSeek";
+			const indexes: unknown[] = [];
+			if (Object.hasOwn(item, "auth-index")) indexes.push(item["auth-index"]);
+			if (Object.hasOwn(item, "api-key-entries")) {
+				if (!Array.isArray(item["api-key-entries"])) throw invalid();
+				for (const entry of item["api-key-entries"]) {
+					if (!record(entry)) throw invalid();
+					indexes.push(entry["auth-index"]);
+				}
+			} else if (!Object.hasOwn(item, "auth-index")) {
+				// No complete key collection or legacy selector: cannot assert emptiness.
+				throw invalid();
 			}
-		} else if (!Object.hasOwn(item, "auth-index")) {
-			// No complete key collection or legacy selector: cannot assert emptiness.
-			throw invalid();
-		}
-		const seen = new Set<string>();
-		const uniqueIndexes = indexes.filter((value) => {
-			const id = accountId(value);
-			if (!id) return true;
-			if (seen.has(id)) return false;
-			seen.add(id);
-			return true;
-		});
-		for (const [index, authIndex] of uniqueIndexes.entries()) {
-			files.push({
-				auth_index: authIndex,
-				provider: "deepseek",
-				label: uniqueIndexes.length > 1 ? `${label} ${index + 1}` : label,
+			const seen = new Set<string>();
+			const uniqueIndexes = indexes.filter((value) => {
+				const id = accountId(value);
+				if (!id) return true;
+				if (seen.has(id)) return false;
+				seen.add(id);
+				return true;
 			});
+			for (const [index, authIndex] of uniqueIndexes.entries()) {
+				files.push({
+					auth_index: authIndex,
+					provider: "deepseek",
+					label: uniqueIndexes.length > 1 ? `${label} ${index + 1}` : label,
+				});
+			}
 		}
-	}
-	return files;
+		return files;
+	});
 }
 
 export async function validateManagementAccess(
@@ -391,11 +411,15 @@ export async function validateManagementAccess(
 	return source.managementUrl;
 }
 
-function remoteHeaders(values?: Record<string, string | string[]>): Headers {
+function remoteHeaders(values: unknown): Headers {
 	const headers = new Headers();
-	for (const [name, value] of Object.entries(values ?? {})) {
+	if (!record(values)) return headers;
+	// This is the only provider response header used for quota parsing.
+	for (const [name, value] of Object.entries(values)) {
+		if (name.toLowerCase() !== "x-codex-primary-used-percent") continue;
 		for (const item of Array.isArray(value) ? value : [value]) {
-			headers.append(name, item);
+			if (typeof item !== "string") continue;
+			try { headers.append(name, item); } catch { /* Ignore malformed metadata. */ }
 		}
 	}
 	return headers;
@@ -407,6 +431,7 @@ async function remoteUsageRequest(
 	auth: RemoteAuthFile,
 	provider: ProviderName,
 	signal?: AbortSignal,
+	report?: ManagementReport,
 ): Promise<UsageResponse> {
 	signal?.throwIfAborted();
 	const id = accountId(auth.auth_index);
@@ -431,33 +456,34 @@ async function remoteUsageRequest(
 			}),
 		},
 		signal,
+		report,
+		(value) => {
+			if (!record(value) || !Number.isInteger(value.status_code) ||
+				typeof value.status_code !== "number" || value.status_code < 100 || value.status_code > 599) {
+				throw invalidResponse("management", "invalid remote API response");
+			}
+			// Capture at response decoding, not when sibling requests finish.
+			return { result: value as RemoteApiCallResponse, now: Date.now() };
+		},
 	);
 	signal?.throwIfAborted();
-	if (!record(value)) throw new Error("invalid remote API response");
-	const result = value as RemoteApiCallResponse;
-	if (
-		typeof result.status_code !== "number" ||
-		result.status_code < 200 ||
-		result.status_code >= 300
-	) {
-		throw new Error(
-			typeof result.status_code === "number"
-				? `HTTP ${result.status_code}`
-				: "invalid remote API response",
-		);
+	const { result, now } = value;
+	const status = result.status_code!;
+	if (status < 200 || status >= 300) {
+		throw new RequestError(httpFailure("provider", status, retryAfterFromRemoteHeaders(result.header, now)), `HTTP ${status}`);
 	}
 	let body = result.body;
 	if (typeof body === "string") {
 		try {
 			body = JSON.parse(body);
 		} catch {
-			throw new Error("invalid provider response");
+			throw invalidResponse("provider", "invalid provider response");
 		}
 	}
 	return { body, headers: remoteHeaders(result.header) };
 }
 
-function failedAccount(auth: RemoteAuthFile, provider: ProviderName, message: string, queried = false): AccountUsage {
+function failedAccount(auth: RemoteAuthFile, provider: ProviderName, message: string, queried = false, failure?: RequestFailure): AccountUsage {
 	const id = accountId(auth.auth_index);
 	return {
 		provider,
@@ -466,6 +492,7 @@ function failedAccount(auth: RemoteAuthFile, provider: ProviderName, message: st
 		queried,
 		windows: [],
 		error: message,
+		...(failure ? { failure } : {}),
 	};
 }
 
@@ -475,32 +502,31 @@ async function fetchRemoteUsage(
 	auth: RemoteAuthFile,
 	provider: ProviderName,
 	signal?: AbortSignal,
-): Promise<{ item: AccountUsage; managementAuthFailed: boolean }> {
+	report?: ManagementReport,
+): Promise<AccountUsage> {
 	signal?.throwIfAborted();
 	let queried = false;
 	try {
 		if (auth.unavailable) throw new Error("account unavailable");
 		if (!accountId(auth.auth_index)) throw new Error("missing remote auth_index");
 		queried = true;
-		const response = await remoteUsageRequest(baseUrl, managementKey, auth, provider, signal);
+		const response = await remoteUsageRequest(baseUrl, managementKey, auth, provider, signal, report);
 		signal?.throwIfAborted();
+		let parsed: Pick<AccountUsage, "windows" | "balance">;
+		try { parsed = parseUsageResponse(provider, response); }
+		catch { throw invalidResponse("provider", "invalid provider response"); }
 		const id = accountId(auth.auth_index);
 		return {
-			item: {
-				provider,
-				...(id !== undefined ? { accountId: id } : {}),
-				label: remoteLabel(auth),
-				queried,
-				...parseUsageResponse(provider, response),
-			},
-			managementAuthFailed: false,
+			provider,
+			...(id !== undefined ? { accountId: id } : {}),
+			label: remoteLabel(auth),
+			queried,
+			...parsed,
 		};
 	} catch (error) {
 		signal?.throwIfAborted();
-		return {
-			item: failedAccount(auth, provider, managementErrorMessage(error), queried),
-			managementAuthFailed: isManagementAuthFailure(error),
-		};
+		return failedAccount(auth, provider, managementErrorMessage(error), queried,
+			error instanceof RequestError ? error.failure : undefined);
 	}
 }
 
@@ -557,12 +583,38 @@ export async function readAccounts(
 	const managementUrl = source.managementUrl;
 	const managementKey = config.managementKey;
 	const discovered = new Map<ProviderName, RemoteAuthFile[]>();
-	const failures = new Map<ProviderName, string>();
-	let authFailure: string | undefined;
+	type DiscoveryFailure = { error: string; failure?: RequestFailure; attempted: boolean };
+	const failures = new Map<ProviderName, DiscoveryFailure>();
+	const management: NonNullable<ReadAccountsResult["management"]> = { attempted: false, failures: [] };
+	let managementAuthFailed = false;
+	let blocker: { error: string; failure: RequestFailure } | undefined;
+	const report: ManagementReport = (failure) => {
+		signal?.throwIfAborted();
+		management.attempted = true;
+		if (!failure) return;
+		management.failures.push(failure);
+		const auth = failure.category === "auth";
+		if (auth) managementAuthFailed = true;
+		// A known Management 429 also stops this round's unstarted work even
+		// without a server deadline. Controller treats that as local backoff.
+		if (auth || failure.category === "rate-limit" || (failure.retryAfterAt !== undefined && failure.retryAfterAt > Date.now())) {
+			if (!blocker || (failure.retryAfterAt ?? 0) > (blocker.failure.retryAfterAt ?? 0)) {
+				blocker = {
+					failure,
+					error: managementErrorMessage(new ManagementHttpError(failure.status!, undefined, failure.retryAfterAt)),
+				};
+			}
+		}
+	};
+	const discoveryFailure = (error: unknown): DiscoveryFailure => ({
+		error: managementErrorMessage(error),
+		...(error instanceof RequestError ? { failure: error.failure } : {}),
+		attempted: true,
+	});
 	const ordinary = selectedProviders.filter((provider) => provider !== "deepseek");
 	if (ordinary.length) {
 		try {
-			const files = await readAuthFiles(managementUrl, managementKey, signal);
+			const files = await readAuthFiles(managementUrl, managementKey, signal, report);
 			signal?.throwIfAborted();
 			for (const provider of ordinary) discovered.set(provider, []);
 			for (const auth of files) {
@@ -571,23 +623,19 @@ export async function readAccounts(
 			}
 		} catch (error) {
 			signal?.throwIfAborted();
-			const message = managementErrorMessage(error);
-			for (const provider of ordinary) failures.set(provider, message);
-			if (isManagementAuthFailure(error)) authFailure = message;
+			for (const provider of ordinary) failures.set(provider, discoveryFailure(error));
 		}
 	}
 	if (selectedProviders.includes("deepseek")) {
-		if (authFailure) failures.set("deepseek", authFailure);
+		if (blocker) failures.set("deepseek", { ...blocker, attempted: false });
 		else {
 			try {
-				const files = await readDeepSeekAuthFiles(managementUrl, managementKey, signal);
+				const files = await readDeepSeekAuthFiles(managementUrl, managementKey, signal, report);
 				signal?.throwIfAborted();
 				discovered.set("deepseek", files);
 			} catch (error) {
 				signal?.throwIfAborted();
-				const message = managementErrorMessage(error);
-				failures.set("deepseek", message);
-				if (isManagementAuthFailure(error)) authFailure = message;
+				failures.set("deepseek", discoveryFailure(error));
 			}
 		}
 	}
@@ -595,9 +643,9 @@ export async function readAccounts(
 	const queries: Promise<void>[] = [];
 	for (const provider of selectedProviders) {
 		signal?.throwIfAborted();
-		const error = failures.get(provider);
-		if (error !== undefined) {
-			providers.push({ provider, discovery: "failure", error });
+		const failure = failures.get(provider);
+		if (failure !== undefined) {
+			providers.push({ provider, discovery: "failure", ...failure });
 			continue;
 		}
 		const seen = new Set<string>();
@@ -610,18 +658,16 @@ export async function readAccounts(
 		});
 		const result = { provider, discovery: "success" as const, items: [] as AccountUsage[] };
 		providers.push(result);
-		// Preserve concurrent account queries and stable discovery order. A known
-		// auth failure stops unstarted work, not requests already in flight.
+		// Preserve concurrent queries and stable order. Only unstarted work is skipped.
 		queries.push(Promise.all(accounts.map(async (auth) => {
 			signal?.throwIfAborted();
-			if (authFailure) return failedAccount(auth, provider, authFailure);
-			const read = await fetchRemoteUsage(managementUrl, managementKey, auth, provider, signal);
+			if (blocker) return failedAccount(auth, provider, blocker.error, false, blocker.failure);
+			const read = await fetchRemoteUsage(managementUrl, managementKey, auth, provider, signal, report);
 			signal?.throwIfAborted();
-			if (read.managementAuthFailed) authFailure = read.item.error;
-			return read.item;
-		})).then((items) => { result.items = items; }));
+			return read;
+		})).then((items) => { signal?.throwIfAborted(); result.items = items; }));
 	}
 	await Promise.all(queries);
 	signal?.throwIfAborted();
-	return { providers, managementAuthFailed: authFailure !== undefined };
+	return { providers, managementAuthFailed, management };
 }

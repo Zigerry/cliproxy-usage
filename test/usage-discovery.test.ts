@@ -342,8 +342,9 @@ test("one 10-second request budget covers fetch and delayed JSON, even when body
 		timeout.abort(new DOMException("synthetic body timeout", "TimeoutError"));
 		const result = await reading;
 		assert.equal(result.managementAuthFailed, false);
-		if (stage === "discovery") assert.match(failure(result, "codex"), /synthetic body timeout/);
-		else assert.match(success(result, "codex")[0]?.error ?? "", /synthetic body timeout/);
+		if (stage === "discovery") assert.match(failure(result, "codex"), /management request timed out/);
+		else assert.match(success(result, "codex")[0]?.error ?? "", /management request timed out/);
+		assert.equal(result.management?.failures[0]?.category, "timeout");
 		assert.deepEqual(budgets, stage === "discovery" ? [10_000] : [10_000, 10_000]);
 		body.reject(new Error("late timed-out body rejection"));
 		await new Promise<void>((resolve) => setImmediate(resolve));
