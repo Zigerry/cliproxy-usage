@@ -1,6 +1,6 @@
 # D: safe HTTP facts and refresh eligibility
 
-Issue #21. Stacked on C PR #20 (`feat/19-usage-state`). Design reviewed and amended per advisor; implementation pending; no runtime dependency, SDK/version change, automatic merge or release. E's layout/theme/widget options are excluded.
+Issue #21. Stacked on C PR #20 (`feat/19-usage-state`). Design reviewed and amended per advisor; implementation and local verification saved (see refresh-backoff-verification.md); no runtime dependency, SDK/version change, automatic merge or release. E's layout/theme/widget options are excluded.
 
 ## Safe read outcomes
 
@@ -22,7 +22,7 @@ Take the maximum existing unexpired and newly observed server deadline. No succe
 
 In `performRefresh`, first load/resolve/adopt source and configuration; then filter enabled/requested providers through eligibility before `beginProviderRead`. Effective server deadline is max(source and provider serverUntil); effective automatic gate is max(server deadline, provider backoffUntil, source backoffUntil). Force can bypass only local backoff. Existing rejected Management key stops automatic requests; explicit force may revalidate it, but cannot bypass server wait. `notify` alone is not force. All callers (tick/model/details/r/command/start) use this gate. Recheck at queue execution time, not just enqueue time: a pending force behind a newly rate-limited round is blocked.
 
-Blocked calls resolve immediately, produce no provider HTTP, do not update attempt/results/timestamps/streak, and do not create a waiting queue or timer per caller. Explicit feedback uses the same snapshot. Not being eligible is independent of quota loading/error/unknown state; no fake attempt/failure is recorded.
+Blocked calls settle after the eligibility check without waiting for the deadline, produce no provider HTTP, do not update attempt/results/timestamps/streak, and do not create a waiting queue or timer per caller. Explicit feedback uses the same snapshot. Not being eligible is independent of quota loading/error/unknown state; no fake attempt/failure is recorded.
 
 Keep the current setInterval strategy, not a new retry scheduler. Track the next actual periodic check and its current context/model ownership; timer callback advances this timestamp even if the request gate blocks it. `automaticAllowedAt` and `manualAllowedAt` are deadline constraints, not a promised request. `nextAutomaticCheckAt` describes the existing interval tick, and may precede eligibility. Outside an active periodic schedule/eligible active model/configuration report no automatic plan, not a fabricated retry time. Settings interval changes reset the actual tick anchor and do not shorten server constraints. Display a plan only for the provider matching the current context. Model selection updates timer ownership to the current context without silently creating an extra automatic schedule.
 
