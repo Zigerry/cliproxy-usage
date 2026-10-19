@@ -380,10 +380,11 @@ export class UsageController {
 			const record = applyProviderRead(previous, result,
 				{ attemptedAt, completedAt }, [loaded.settings.managementKey]);
 			const actualProviderRead = result.discovery === "success" && result.items.some((item) => item.queried && item.failure?.scope !== "management");
-			const attempted = result.discovery === "success" && (actualProviderRead || !result.items.some((item) => item.failure?.scope === "management"));
+			const complete = result.discovery === "success" && !result.items.some((item) => item.failure?.scope === "management");
+			const attempted = actualProviderRead || complete;
 			const failures = result.discovery === "success" ? result.items.flatMap((item) =>
 				item.queried && item.failure?.scope === "provider" ? [item.failure] : []) : [];
-			record.retry = updateRetry(previous?.retry, { attempted, failures }, completedAt, intervalMs);
+			record.retry = updateRetry(previous?.retry, { attempted, complete, failures }, completedAt, intervalMs);
 			this.providerStates.set(result.provider, record);
 		}
 		this.rejectedManagementKey = results.managementAuthFailed ? loaded.settings.managementKey : undefined;

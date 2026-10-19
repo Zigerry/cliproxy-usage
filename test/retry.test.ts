@@ -178,3 +178,15 @@ test("force bypasses only local backoff, with inclusive expiry and no tick-based
 	assert.equal(isEligible(local, true, NOW), true);
 	assert.equal(isEligible(local, false, NOW), false);
 });
+
+test("incomplete actual rounds preserve local streak but still collect server instructions", () => {
+	const previous = { failures: 2, backoffUntil: NOW + 4 * MINUTE };
+	assert.deepEqual(updateRetry(previous, { attempted: true, complete: false, failures: [] }, NOW, MINUTE), previous);
+	assert.deepEqual(updateRetry(previous, { attempted: true, complete: false, failures: [failure("auth", NOW + HOUR)] }, NOW, MINUTE), {
+		...previous, serverUntil: NOW + HOUR,
+	});
+	assert.deepEqual(updateRetry(previous, { attempted: true, complete: false, failures: [failure("server")] }, NOW, MINUTE), {
+		failures: 3, backoffUntil: NOW + 4 * MINUTE,
+	});
+	assert.equal(updateRetry(undefined, { attempted: true, complete: false, failures: [] }, NOW, MINUTE), undefined);
+});

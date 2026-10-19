@@ -613,3 +613,19 @@ test("notifications do not bypass Management rejection; explicit force can reval
 	await h.refresh(true);
 	assert.equal(h.snapshot().state, "ready");
 });
+
+test("incomplete Management round cannot reset existing provider local streak", async (t) => {
+	t.mock.timers.enable({ apis: ["Date"], now: START });
+	const h = await harness(t);
+	h.phase = "provider-local";
+	await h.refresh();
+	assert.equal(h.snapshot().eligibility?.backoffUntil, START + 300_000);
+	h.phase = "valid";
+	h.handler = (input, init) => String(input).endsWith("/api-call") && JSON.parse(String(init?.body)).auth_index.endsWith("b")
+		? new Response("", { status: 503 }) : h.reply(input, init);
+	await h.refresh(true);
+	h.phase = "provider-local";
+	h.handler = h.reply;
+	await h.refresh(true);
+	assert.equal(h.snapshot().eligibility?.backoffUntil, START + 600_000);
+});

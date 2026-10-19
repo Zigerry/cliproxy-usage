@@ -34,7 +34,7 @@ function localDelay(intervalMs: number, failures: number): number {
 
 /** Apply one completed round; callers select actual requests of the appropriate scope. */
 export function updateRetry(previous: RetryState | undefined,
-	observation: { attempted: boolean; failures: readonly RequestFailure[] },
+	observation: { attempted: boolean; failures: readonly RequestFailure[]; complete?: boolean },
 	now: number, intervalMs: number): RetryState | undefined {
 	if (!observation.attempted) return previous ? { ...previous } : undefined;
 
@@ -44,7 +44,14 @@ export function updateRetry(previous: RetryState | undefined,
 		hasTemporary ||= temporary(failure);
 		serverUntil = maximum(serverUntil, future(failure.retryAfterAt, now));
 	}
-	if (!hasTemporary) return serverUntil === undefined ? undefined : { failures: 0, serverUntil };
+	if (!hasTemporary) {
+		if (observation.complete === false) return previous || serverUntil !== undefined ? {
+			failures: previous?.failures ?? 0,
+			...(previous?.backoffUntil !== undefined ? { backoffUntil: previous.backoffUntil } : {}),
+			...(serverUntil !== undefined ? { serverUntil } : {}),
+		} : undefined;
+		return serverUntil === undefined ? undefined : { failures: 0, serverUntil };
+	}
 
 	const streak = previous?.failures ?? 0;
 	const failures = Math.min(Number.MAX_SAFE_INTEGER,
