@@ -79,7 +79,7 @@ export default function (pi: ExtensionAPI) {
 		}
 		loaded.settings.managementKey = key;
 		await saveSettings(loaded.settings, loaded.raw, SETTINGS_PATH);
-		usage.resetSettings(loaded.settings);
+		usage.resetSettings(loaded.settings, ctx);
 		ctx.ui.notify(
 			`CLIProxyAPI management access configured for ${source.managementUrl}.`,
 			"info",
@@ -107,14 +107,13 @@ export default function (pi: ExtensionAPI) {
 		if (!confirmed) return;
 		loaded.settings.managementKey = "";
 		await saveSettings(loaded.settings, loaded.raw, SETTINGS_PATH);
-		usage.resetSettings(loaded.settings);
-		usage.renderCurrentModel(ctx);
+		usage.resetSettings(loaded.settings, ctx);
 		ctx.ui.notify("CLIProxyAPI management password cleared.", "info");
 	};
 
 	const showStatus = async (ctx: ExtensionCommandContext) => {
 		const loaded = await loadSettings(SETTINGS_PATH, LEGACY_SETTINGS_PATH);
-		usage.syncSettings(loaded.settings);
+		usage.syncSettings(loaded.settings, ctx);
 		const providers = PROVIDERS.filter(
 			(provider) => loaded.settings.providers[provider],
 		)

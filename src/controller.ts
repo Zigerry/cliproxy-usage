@@ -2,6 +2,7 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { abortable } from "./abort.js";
 import { UsageDetailsComponent } from "./details-ui.js";
 import { PROVIDERS, PROVIDER_LABELS } from "./providers.js";
 import { CoalescingAsyncQueue } from "./refresh.js";
@@ -14,16 +15,24 @@ import {
 	accountsForModel,
 	providerForModel,
 	readAccounts,
+	resolveManagementSource,
 } from "./usage.js";
 import { clearUsage, formatDetails, renderUsage } from "./ui.js";
 import type { AccountUsage, ProviderName, Settings } from "./types.js";
 
 type RefreshRequest = {
+	readonly generation: number;
 	ctx: ExtensionContext;
 	providers: ProviderName[];
 	notifyProviders: ProviderName[];
 	force: boolean;
 	loaded?: LoadedSettings;
+};
+
+type RefreshOperation = {
+	readonly generation: number;
+	controller: AbortController;
+	providers: ProviderName[];
 };
 
 type UsageControllerPaths = {
@@ -42,7 +51,10 @@ export class UsageController {
 	private fetchedProviders = new Set<ProviderName>();
 	private lastUpdated = new Map<ProviderName, Date>();
 	private lastRefreshErrors = new Map<ProviderName, string>();
-	private refreshingProviders = new Map<ProviderName, number>();
+	private readonly refreshRequests = new Set<RefreshRequest>();
+	private generation = 0;
+	private operation: RefreshOperation | undefined;
+	private sourceBoundary: { url: string | undefined; key: string } | undefined;
 	private readonly changeListeners = new Set<() => void>();
 	private maxVisibleAccounts = DEFAULT_SETTINGS.maxVisibleAccounts;
 	private settingsSnapshot: Settings = structuredClone(DEFAULT_SETTINGS);
@@ -54,7 +66,8 @@ export class UsageController {
 
 	constructor(private readonly paths: UsageControllerPaths) {
 		this.refreshQueue = new CoalescingAsyncQueue<RefreshRequest>(
-			(current, next) => ({
+			(current, next) => current.generation !== next.generation ? next : ({
+				generation: next.generation,
 				ctx: next.ctx,
 				providers: uniqueProviders(current.providers, next.providers),
 				notifyProviders: uniqueProviders(
@@ -90,7 +103,31 @@ export class UsageController {
 	}
 
 	private providerIsRefreshing(provider: ProviderName): boolean {
-		return (this.refreshingProviders.get(provider) ?? 0) > 0;
+		if (!this.active) return false;
+		if (this.operation && this.owns(this.operation) && this.operation.providers.includes(provider)) return true;
+		return [...this.refreshRequests].some((request) =>
+			request.generation === this.generation && request.providers.includes(provider));
+	}
+
+	private owns(operation: RefreshOperation): boolean {
+		return this.active && this.operation === operation &&
+			operation.generation === this.generation && !operation.controller.signal.aborted;
+	}
+
+	private invalidateWork(ctx?: ExtensionContext): void {
+		this.generation++;
+		this.refreshQueue.cancelPending();
+		this.refreshRequests.clear();
+		const operation = this.operation;
+		this.operation = undefined;
+		operation?.controller.abort();
+		if (ctx?.hasUI) ctx.ui.setStatus("cliproxy-usage", undefined);
+	}
+
+	private settingsInvalidateWork(settings: Settings): boolean {
+		return settings.managementUrl !== this.settingsSnapshot.managementUrl ||
+			settings.managementKey !== this.settingsSnapshot.managementKey ||
+			PROVIDERS.some((provider) => settings.providers[provider] !== this.settingsSnapshot.providers[provider]);
 	}
 
 	private providerIsStale(provider: ProviderName): boolean {
@@ -125,17 +162,15 @@ export class UsageController {
 		provider: ProviderName,
 		items: AccountUsage[],
 	): AccountUsage[] {
-		const cachedByLabel = new Map<string, AccountUsage[]>();
+		const cachedById = new Map<string, AccountUsage>();
 		for (const item of this.itemsForProvider(provider)) {
-			if (item.error) continue;
-			const matches = cachedByLabel.get(item.label) ?? [];
-			matches.push(item);
-			cachedByLabel.set(item.label, matches);
+			if (item.error || !item.accountId || (!item.windows.length && !item.balance)) continue;
+			cachedById.set(item.accountId, item);
 		}
 		return items.map((item) => {
-			if (!item.error) return item;
-			const matches = cachedByLabel.get(item.label);
-			return matches?.shift() ?? item;
+			if (!item.error || !item.accountId) return item;
+			const cached = cachedById.get(item.accountId);
+			return cached ? { ...cached, label: item.label } : item;
 		});
 	}
 
@@ -155,25 +190,18 @@ export class UsageController {
 		}
 	}
 
-	private requestRefresh(request: RefreshRequest): Promise<void> {
-		for (const provider of request.providers) {
-			this.refreshingProviders.set(
-				provider,
-				(this.refreshingProviders.get(provider) ?? 0) + 1,
-			);
-		}
+	private requestRefresh(input: Omit<RefreshRequest, "generation">): Promise<void> {
+		if (!this.active) return Promise.resolve();
+		const request: RefreshRequest = {
+			...input,
+			generation: this.generation,
+			loaded: input.loaded ? { ...input.loaded, settings: structuredClone(input.loaded.settings) } : undefined,
+		};
+		this.refreshRequests.add(request);
 		this.emitChange();
 		return this.refreshQueue.request(request).finally(() => {
-			for (const provider of request.providers) {
-				const remaining =
-					(this.refreshingProviders.get(provider) ?? 1) - 1;
-				if (remaining > 0) {
-					this.refreshingProviders.set(provider, remaining);
-				} else {
-					this.refreshingProviders.delete(provider);
-				}
-			}
-			this.emitChange();
+			this.refreshRequests.delete(request);
+			if (this.active && request.generation === this.generation) this.emitChange();
 		});
 	}
 
@@ -263,157 +291,111 @@ export class UsageController {
 	}
 
 	private async runRefresh(request: RefreshRequest): Promise<void> {
-		if (!this.active) return;
-		let loaded: LoadedSettings;
+		if (!this.active || request.generation !== this.generation) return;
+		const operation: RefreshOperation = {
+			generation: request.generation,
+			controller: new AbortController(),
+			providers: request.providers,
+		};
+		this.operation = operation;
 		try {
-			loaded =
-				request.loaded ??
-				(await loadSettings(
-					this.paths.settingsPath,
-					this.paths.legacySettingsPath,
-				));
+			await abortable(this.performRefresh(request, operation), operation.controller.signal);
 		} catch (error) {
+			if (!this.owns(operation)) return;
 			const message = error instanceof Error ? error.message : String(error);
-			for (const provider of request.providers) {
-				this.recordProviderFailure(provider, message);
-			}
+			for (const provider of operation.providers) this.recordProviderFailure(provider, message);
+			this.renderCurrentModel(request.ctx);
 			this.emitChange();
-			if (request.ctx.hasUI) {
-				request.ctx.ui.notify(
-					`Failed to load CLIProxyAPI usage settings: ${message}`,
-					"error",
-				);
+			if (request.ctx.hasUI) request.ctx.ui.notify(`Failed to refresh CLIProxyAPI usage: ${message}`, "error");
+		} finally {
+			const current = this.owns(operation);
+			if (this.operation === operation) this.operation = undefined;
+			if (current) {
+				if (request.ctx.hasUI) request.ctx.ui.setStatus("cliproxy-usage", undefined);
+				this.emitChange();
 			}
-			return;
 		}
-		if (!this.active) return;
-		this.settingsSnapshot = loaded.settings;
+	}
+
+	private async performRefresh(request: RefreshRequest, operation: RefreshOperation): Promise<void> {
+		const loaded = request.loaded ?? await loadSettings(this.paths.settingsPath, this.paths.legacySettingsPath);
+		if (!this.owns(operation)) return;
+		const source = await resolveManagementSource(loaded.settings, this.paths.providerConfigPath);
+		if (!this.owns(operation)) return;
+
+		const boundaryChanged = this.sourceBoundary !== undefined && (
+			this.sourceBoundary.url !== source.managementUrl ||
+			this.sourceBoundary.key !== loaded.settings.managementKey
+		);
+		// Boundary adoption is distinct from the immutable operation generation.
+		// There is only one valid operation; obsolete pending work must not follow it.
+		if (boundaryChanged || (this.sourceBoundary && this.settingsInvalidateWork(loaded.settings))) {
+			this.refreshQueue.cancelPending();
+			this.refreshRequests.clear();
+		}
+		if (boundaryChanged) {
+			this.clearAllCaches();
+			this.rejectedManagementKey = undefined;
+			this.rejectedManagementError = undefined;
+		}
+		this.sourceBoundary = { url: source.managementUrl, key: loaded.settings.managementKey };
+		this.settingsSnapshot = structuredClone(loaded.settings);
 		this.maxVisibleAccounts = loaded.settings.maxVisibleAccounts;
 		this.notifySettingsWarnings(request.ctx, loaded);
-
-		for (const provider of request.providers) {
-			if (!loaded.settings.providers[provider]) {
-				this.clearProviderCache(provider);
-			}
+		for (const provider of PROVIDERS) {
+			if (!loaded.settings.providers[provider]) this.clearProviderCache(provider);
 		}
-		const enabledProviders = request.providers.filter(
-			(provider) => loaded.settings.providers[provider],
-		);
-		if (
-			!request.force &&
-			!request.notifyProviders.length &&
-			loaded.settings.managementKey &&
-			this.rejectedManagementKey === loaded.settings.managementKey
-		) {
-			const message =
-				this.rejectedManagementError ||
-				"management authentication failed; run /cliproxy-usage setup";
-			for (const provider of enabledProviders) {
-				this.recordProviderFailure(provider, message);
-			}
+		operation.providers = request.providers.filter((provider) => loaded.settings.providers[provider]);
+		if (!request.force && !request.notifyProviders.length && loaded.settings.managementKey &&
+			this.rejectedManagementKey === loaded.settings.managementKey) {
+			const message = this.rejectedManagementError || "management authentication failed; run /cliproxy-usage setup";
+			for (const provider of operation.providers) this.recordProviderFailure(provider, message);
 			this.renderCurrentModel(request.ctx);
 			this.emitChange();
 			return;
 		}
 
-		if (request.ctx.hasUI && enabledProviders.length) {
-			request.ctx.ui.setStatus(
-				"cliproxy-usage",
-				request.ctx.ui.theme.fg("dim", "quota refreshing…"),
-			);
+		if (request.ctx.hasUI && operation.providers.length) {
+			request.ctx.ui.setStatus("cliproxy-usage", request.ctx.ui.theme.fg("dim", "quota refreshing…"));
 		}
-		try {
-			let managementAuthFailed = false;
-			const providerFailures = new Map<ProviderName, string>();
-			const results = enabledProviders.length
-				? await readAccounts(loaded.settings, {
-						providerConfigPath: this.paths.providerConfigPath,
-						providers: enabledProviders,
-						onManagementAuthFailure: () => {
-							managementAuthFailed = true;
-						},
-						onProviderFailure: (provider, message) => {
-							providerFailures.set(provider, message);
-						},
-					})
-				: [];
-			if (!this.active) return;
-			for (const provider of enabledProviders) {
-				const providerItems = results.filter(
-					(item) => item.provider === provider,
-				);
-				const failedItems = providerItems.filter(
-					(item): item is AccountUsage & { error: string } =>
-						Boolean(item.error),
-				);
-				const allAccountsFailed =
-					providerItems.length > 0 &&
-					failedItems.length === providerItems.length;
-				const providerFailure = providerFailures.get(provider);
-				const failure = providerFailure
-					? providerFailure
-					: [
-							...new Set(
-								failedItems.map(
-									(item) => `${item.label}: ${item.error}`,
-								),
-							),
-						].join("; ");
-				if ((providerFailures.has(provider) && !providerItems.length) || allAccountsFailed) {
-					this.recordProviderFailure(provider, failure, providerItems);
-					continue;
-				}
-				this.replaceProviderItems(
-					provider,
-					failedItems.length
-						? this.mergeFailedAccountItems(provider, providerItems)
-						: providerItems,
-				);
+		const results = operation.providers.length
+			? await readAccounts(loaded.settings, { source, providers: operation.providers, signal: operation.controller.signal })
+			: { providers: [], managementAuthFailed: false };
+		if (!this.owns(operation)) return;
+		for (const result of results.providers) {
+			const { provider } = result;
+			if (result.discovery === "failure") {
+				this.recordProviderFailure(provider, result.error);
+				continue;
+			}
+			const failed = result.items.filter((item) => item.error);
+			const allFailed = result.items.length > 0 && failed.length === result.items.length;
+			const failure = [...new Set(failed.map((item) => `${item.label}: ${item.error}`))].join("; ");
+			// Successful discovery is authoritative, even when every query failed.
+			this.replaceProviderItems(provider, this.mergeFailedAccountItems(provider, result.items));
+			if (!allFailed) {
 				this.fetchedProviders.add(provider);
 				this.lastUpdated.set(provider, new Date());
-				if (failure) {
-					this.lastRefreshErrors.set(provider, failure);
-				} else {
-					this.lastRefreshErrors.delete(provider);
-				}
 			}
-			this.rejectedManagementKey = managementAuthFailed
-				? loaded.settings.managementKey
-				: undefined;
-			this.rejectedManagementError = managementAuthFailed
-				? results.find((item) => item.error)?.error
-				: undefined;
-			this.renderCurrentModel(request.ctx);
-			this.emitChange();
-			for (const provider of request.notifyProviders) {
-				this.notifyProviderState(request.ctx, provider);
-			}
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			for (const provider of enabledProviders) {
-				this.recordProviderFailure(provider, message);
-			}
-			this.renderCurrentModel(request.ctx);
-			this.emitChange();
-			if (request.ctx.hasUI) {
-				request.ctx.ui.notify(
-					`Failed to refresh CLIProxyAPI usage: ${message}`,
-					"error",
-				);
-			}
-		} finally {
-			if (request.ctx.hasUI) {
-				request.ctx.ui.setStatus("cliproxy-usage", undefined);
-			}
+			if (failure) this.lastRefreshErrors.set(provider, failure);
+			else this.lastRefreshErrors.delete(provider);
 		}
+		this.rejectedManagementKey = results.managementAuthFailed ? loaded.settings.managementKey : undefined;
+		this.rejectedManagementError = results.managementAuthFailed
+			? "management authentication failed; run /cliproxy-usage setup"
+			: undefined;
+		this.renderCurrentModel(request.ctx);
+		this.emitChange();
+		for (const provider of request.notifyProviders) this.notifyProviderState(request.ctx, provider);
 	}
 
 	private reportBackgroundError(
 		ctx: ExtensionContext,
 		promise: Promise<void>,
 	): void {
+		const generation = this.generation;
 		void promise.catch((error) => {
-			if (this.active && ctx.hasUI) {
+			if (this.active && generation === this.generation && ctx.hasUI) {
 				ctx.ui.notify(
 					`CLIProxyAPI usage refresh failed: ${error instanceof Error ? error.message : String(error)}`,
 					"error",
@@ -430,6 +412,7 @@ export class UsageController {
 			loaded?: LoadedSettings;
 		} = {},
 	): Promise<void> {
+		if (!this.active) return Promise.resolve();
 		const provider = this.providerForContext(ctx);
 		if (!provider) {
 			if (options.loaded) {
@@ -462,6 +445,8 @@ export class UsageController {
 	}
 
 	async showDetails(ctx: ExtensionCommandContext): Promise<void> {
+		if (!this.active) return;
+		const generation = this.generation;
 		const provider = this.providerForContext(ctx);
 		if (!provider) {
 			ctx.ui.notify(
@@ -508,6 +493,7 @@ export class UsageController {
 					isRefreshing: () => this.providerIsRefreshing(provider),
 					getError: () => this.lastRefreshErrors.get(provider),
 					onRefresh: () => {
+						if (!this.active || generation !== this.generation) return;
 						this.reportBackgroundError(
 							ctx,
 							this.refreshCurrent(ctx, { force: true }),
@@ -520,13 +506,14 @@ export class UsageController {
 					},
 				});
 				unsubscribe = this.subscribe(() => {
+					if (!this.active || generation !== this.generation) return;
 					component.invalidate();
 					tui.requestRender();
 				});
 				queueMicrotask(() => {
 					if (
 						!closed &&
-						this.active &&
+						this.active && generation === this.generation &&
 						this.providerIsStale(provider) &&
 						!this.providerIsRefreshing(provider)
 					) {
@@ -555,8 +542,14 @@ export class UsageController {
 	}
 
 	start(ctx: ExtensionContext, loaded: LoadedSettings): void {
+		this.invalidateWork(ctx);
+		this.clearAllCaches();
+		this.sourceBoundary = undefined;
+		this.rejectedManagementKey = undefined;
+		this.rejectedManagementError = undefined;
+		this.lastSettingsWarning = undefined;
 		this.active = true;
-		this.settingsSnapshot = loaded.settings;
+		this.settingsSnapshot = structuredClone(loaded.settings);
 		this.maxVisibleAccounts = loaded.settings.maxVisibleAccounts;
 		this.scheduleRefresh(ctx, loaded.settings.refreshMinutes);
 		this.reportBackgroundError(ctx, this.refreshCurrent(ctx, { loaded }));
@@ -564,12 +557,15 @@ export class UsageController {
 
 	shutdown(ctx: ExtensionContext): void {
 		this.active = false;
+		this.invalidateWork();
 		if (this.timer) clearInterval(this.timer);
 		this.timer = undefined;
 		this.clearAllCaches();
 		this.rejectedManagementKey = undefined;
 		this.rejectedManagementError = undefined;
 		this.lastSettingsWarning = undefined;
+		this.sourceBoundary = undefined;
+		this.changeListeners.clear();
 		clearUsage(ctx);
 	}
 
@@ -577,9 +573,10 @@ export class UsageController {
 		ctx: ExtensionContext,
 		provider: ProviderName | undefined,
 	): void {
+		if (!this.active) return;
 		renderUsage(
 			ctx,
-			this.itemsForProvider(provider),
+			provider && this.settingsSnapshot.providers[provider] ? this.itemsForProvider(provider) : [],
 			this.maxVisibleAccounts,
 		);
 		if (!provider || !this.settingsSnapshot.providers[provider]) return;
@@ -604,7 +601,9 @@ export class UsageController {
 		settings: Settings,
 		changedId: string,
 	): Promise<void> {
-		this.settingsSnapshot = settings;
+		if (!this.active) return;
+		if (this.settingsInvalidateWork(settings)) this.invalidateWork(ctx);
+		this.settingsSnapshot = structuredClone(settings);
 		this.scheduleRefresh(ctx, settings.refreshMinutes);
 		if (changedId === "maxVisibleAccounts") {
 			this.maxVisibleAccounts = settings.maxVisibleAccounts;
@@ -625,20 +624,39 @@ export class UsageController {
 			return;
 		}
 		this.clearAllCaches();
+		this.sourceBoundary = undefined;
 		this.rejectedManagementKey = undefined;
 		this.rejectedManagementError = undefined;
+		this.renderCurrentModel(ctx);
 		await this.refreshCurrent(ctx, { force: true });
 	}
 
-	resetSettings(settings: Settings): void {
-		this.settingsSnapshot = settings;
+	resetSettings(settings: Settings, ctx?: ExtensionContext): void {
+		this.invalidateWork(ctx);
+		this.settingsSnapshot = structuredClone(settings);
 		this.clearAllCaches();
+		this.sourceBoundary = undefined;
 		this.rejectedManagementKey = undefined;
 		this.rejectedManagementError = undefined;
+		if (ctx) this.renderCurrentModel(ctx);
+		this.emitChange();
 	}
 
-	syncSettings(settings: Settings): void {
-		this.settingsSnapshot = settings;
+	syncSettings(settings: Settings, ctx?: ExtensionContext): void {
+		const sourceChanged = settings.managementUrl !== this.settingsSnapshot.managementUrl ||
+			settings.managementKey !== this.settingsSnapshot.managementKey;
+		if (this.settingsInvalidateWork(settings)) this.invalidateWork(ctx);
+		if (sourceChanged) {
+			this.clearAllCaches();
+			this.sourceBoundary = undefined;
+			this.rejectedManagementKey = undefined;
+			this.rejectedManagementError = undefined;
+		}
+		for (const provider of PROVIDERS) if (!settings.providers[provider]) this.clearProviderCache(provider);
+		this.settingsSnapshot = structuredClone(settings);
+		this.maxVisibleAccounts = settings.maxVisibleAccounts;
+		if (ctx) this.renderCurrentModel(ctx);
+		this.emitChange();
 	}
 
 	lastRefresh(provider: ProviderName | undefined): Date | undefined {

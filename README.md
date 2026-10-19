@@ -33,6 +33,8 @@ work… │ 7d ━━━━━─ left 85%    personal… │ 7d ━━━━─
 - Supports `r` force refresh and `↑`/`↓` scrolling.
 - Keeps cached data visible when a refresh fails.
 - Coalesces overlapping automatic and manual refresh requests.
+- Isolates fallback data by Management source and stable account identity, not display names.
+- Cancels obsolete work after logout, configuration changes, provider disablement, or session shutdown.
 - Stores no quota or balance cache on disk.
 
 Quota bars represent **remaining** capacity:

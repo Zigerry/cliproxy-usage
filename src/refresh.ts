@@ -29,6 +29,13 @@ export class CoalescingAsyncQueue<T> {
 		return promise;
 	}
 
+	/** Resolve canceled callers; leave running work and future requests alone. */
+	cancelPending(): void {
+		const pending = this.pending;
+		this.pending = undefined;
+		for (const waiter of pending?.waiters ?? []) waiter.resolve();
+	}
+
 	private async drain(): Promise<void> {
 		if (this.running) return;
 		this.running = true;

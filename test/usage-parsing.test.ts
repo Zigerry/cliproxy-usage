@@ -22,7 +22,12 @@ async function withUsageResponse(
 			}
 			return Response.json({ status_code: 200, body, header });
 		};
-		const items = await readAccounts(settings, { providers: [provider] });
+		const result = await readAccounts(settings, { providers: [provider] });
+		assert.equal(result.managementAuthFailed, false);
+		assert.equal(result.providers.length, 1);
+		const discovery = result.providers[0]!;
+		if (discovery.discovery !== "success") assert.fail(discovery.error);
+		const items = discovery.items;
 		assert.equal(requests, 2);
 		assert.equal(items.length, 1);
 		assert.equal(items[0]?.error, undefined);
