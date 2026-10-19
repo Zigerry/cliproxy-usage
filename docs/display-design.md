@@ -1,6 +1,6 @@
 # E: narrow layouts, host theme and widget visibility
 
-Issue #23, stacked on D PR #22 (`feat/21-refresh-backoff`). Design reviewed and amended per advisor; implementation pending. Three independently verified atomic commits: E1 layout, E2 theme, E3 showWidget. No SDK/package version change, new runtime dependency, extra settings framework, editor/footer takeover, automatic merge or release.
+Issue #23, stacked on D PR #22 (`feat/21-refresh-backoff`). Design reviewed and amended per advisor; E1/E2/E3 implemented and locally verified (see display-verification.md), completion review pending. Three independently verified atomic commits: E1 layout, E2 theme, E3 showWidget. No SDK/package version change, new runtime dependency, extra settings framework, editor/footer takeover, automatic merge or release.
 
 ## E1: preserve fields before decoration
 
