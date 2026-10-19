@@ -25,6 +25,7 @@ import type { ProviderName, ProviderUsageState, RetryState, Settings, UsageConfi
 type RefreshRequest = {
 	readonly generation: number;
 	readonly displayRevision: number;
+	readonly observationRevision: number;
 	ctx: ExtensionContext;
 	providers: ProviderName[];
 	notifyProviders: ProviderName[];
@@ -61,6 +62,7 @@ export class UsageController {
 	private readonly refreshRequests = new Set<RefreshRequest>();
 	private generation = 0;
 	private displayRevision = 0;
+	private observationRevision = 0;
 	private operation: RefreshOperation | undefined;
 	private sourceBoundary: { source: ManagementSource; key: string } | undefined;
 	private readonly changeListeners = new Set<() => void>();
@@ -75,8 +77,9 @@ export class UsageController {
 		this.refreshQueue = new CoalescingAsyncQueue<RefreshRequest>(
 			(current, next) => current.generation !== next.generation ? next : ({
 				generation: next.generation,
-				// Keep inherited loaded settings paired with their original display revision.
+				// Inherited settings retain both observations, not the newer caller's revisions.
 				displayRevision: next.loaded ? next.displayRevision : current.loaded ? current.displayRevision : next.displayRevision,
+				observationRevision: next.loaded ? next.observationRevision : current.loaded ? current.observationRevision : next.observationRevision,
 				ctx: next.ctx,
 				providers: uniqueProviders(current.providers, next.providers),
 				notifyProviders: uniqueProviders(
@@ -96,8 +99,16 @@ export class UsageController {
 			next.showWidget = this.settingsSnapshot.showWidget;
 		}
 		if (next.showWidget !== this.settingsSnapshot.showWidget) this.displayRevision++;
+		if (this.settingsInvalidateWork(next) || next.refreshMinutes !== this.settingsSnapshot.refreshMinutes ||
+			next.maxVisibleAccounts !== this.settingsSnapshot.maxVisibleAccounts) this.observationRevision++;
 		this.settingsSnapshot = next;
 		if (!next.showWidget) this.clearAgeTimer();
+	}
+
+	private adoptSource(source: ManagementSource, key: string): void {
+		if (!this.sourceBoundary || this.sourceBoundary.source.managementUrl !== source.managementUrl ||
+			this.sourceBoundary.source.error !== source.error || this.sourceBoundary.key !== key) this.observationRevision++;
+		this.sourceBoundary = { source: structuredClone(source), key };
 	}
 
 	private providerForContext(ctx: ExtensionContext): ProviderName | undefined {
@@ -231,12 +242,13 @@ export class UsageController {
 		this.emitChange();
 	}
 
-	private requestRefresh(input: Omit<RefreshRequest, "generation" | "displayRevision">): Promise<void> {
+	private requestRefresh(input: Omit<RefreshRequest, "generation" | "displayRevision" | "observationRevision">): Promise<void> {
 		if (!this.active) return Promise.resolve();
 		const request: RefreshRequest = {
 			...input,
 			generation: this.generation,
 			displayRevision: this.displayRevision,
+			observationRevision: this.observationRevision,
 			loaded: input.loaded ? { ...input.loaded, settings: structuredClone(input.loaded.settings) } : undefined,
 		};
 		this.refreshRequests.add(request);
@@ -331,10 +343,13 @@ export class UsageController {
 	}
 
 	private async performRefresh(request: RefreshRequest, operation: RefreshOperation): Promise<void> {
+		// Fresh reads observe at execution, while cached settings keep their submission revision.
+		const observationRevision = request.loaded ? request.observationRevision : this.observationRevision;
+		if (observationRevision !== this.observationRevision) return;
 		const loaded = request.loaded ?? await loadSettings(this.paths.settingsPath, this.paths.legacySettingsPath);
-		if (!this.owns(operation)) return;
+		if (!this.owns(operation) || observationRevision !== this.observationRevision) return;
 		const source = await resolveManagementSource(loaded.settings, this.paths.providerConfigPath);
-		if (!this.owns(operation)) return;
+		if (!this.owns(operation) || observationRevision !== this.observationRevision) return;
 
 		const boundaryChanged = this.sourceBoundary !== undefined && (
 			this.sourceBoundary.source.managementUrl !== source.managementUrl ||
@@ -351,7 +366,7 @@ export class UsageController {
 			this.clearAllCaches();
 			this.rejectedManagementKey = undefined;
 		}
-		this.sourceBoundary = { source: structuredClone(source), key: loaded.settings.managementKey };
+		this.adoptSource(source, loaded.settings.managementKey);
 		if (this.timer && loaded.settings.refreshMinutes !== this.settingsSnapshot.refreshMinutes) {
 			this.scheduleRefresh(this.refreshContext ?? request.ctx, loaded.settings.refreshMinutes);
 		}
@@ -648,41 +663,22 @@ export class UsageController {
 			return;
 		}
 		if (this.settingsInvalidateWork(settings)) this.invalidateWork(ctx);
+		// SettingsList saves full, cumulative snapshots: the changed ID is not a boundary.
+		if (sourceChanged) {
+			this.clearAllCaches();
+			this.sourceBoundary = undefined;
+			this.rejectedManagementKey = undefined;
+		}
+		for (const provider of changedProviders) if (!settings.providers[provider]) this.clearProviderCache(provider);
 		this.settingsKnown = true;
 		this.adoptSettings(settings);
+		this.maxVisibleAccounts = settings.maxVisibleAccounts;
 		this.scheduleRefresh(ctx, settings.refreshMinutes);
-		if (changedId === "showWidget" && !sourceChanged) {
-			// Combined real provider/interval changes still follow their own boundaries.
-			for (const provider of changedProviders) if (!settings.providers[provider]) this.clearProviderCache(provider);
-			this.maxVisibleAccounts = settings.maxVisibleAccounts;
-			this.publish(ctx);
-			const provider = this.providerForContext(ctx);
-			if (provider && changedProviders.includes(provider) && settings.providers[provider]) await this.refreshCurrent(ctx);
-			return;
+		this.publish(ctx);
+		const provider = this.providerForContext(ctx);
+		if (sourceChanged || (provider && changedProviders.includes(provider) && settings.providers[provider])) {
+			await this.refreshCurrent(ctx, { force: sourceChanged });
 		}
-		if (changedId === "maxVisibleAccounts") {
-			this.maxVisibleAccounts = settings.maxVisibleAccounts;
-			this.publish(ctx);
-			return;
-		}
-		if (changedId === "refreshMinutes") { this.publish(ctx); return; }
-		if ((PROVIDERS as readonly string[]).includes(changedId)) {
-			const provider = changedId as ProviderName;
-			if (!settings.providers[provider]) {
-				this.clearProviderCache(provider);
-				this.renderCurrentModel(ctx);
-				return;
-			}
-			if (this.providerForContext(ctx) === provider) {
-				await this.refreshCurrent(ctx);
-			}
-			return;
-		}
-		this.clearAllCaches();
-		this.sourceBoundary = undefined;
-		this.rejectedManagementKey = undefined;
-		this.renderCurrentModel(ctx);
-		await this.refreshCurrent(ctx, { force: true });
 	}
 
 	resetSettings(settings: Settings, ctx?: ExtensionContext): void {
@@ -733,11 +729,18 @@ export class UsageController {
 		if (!this.active) return;
 		const generation = this.generation;
 		const displayRevision = this.displayRevision;
+		const observationRevision = this.observationRevision;
+		const currentObservation = () => {
+			if (!this.active || generation !== this.generation) return false;
+			if (observationRevision === this.observationRevision) return true;
+			if (ctx.hasUI) ctx.ui.notify("Usage configuration changed while reading status; run /cliproxy-usage status again.", "info");
+			return false;
+		};
 		try {
 			const loaded = await loadSettings(this.paths.settingsPath, this.paths.legacySettingsPath);
-			if (!this.active || generation !== this.generation) return;
+			if (!currentObservation()) return;
 			const source = await resolveManagementSource(loaded.settings, this.paths.providerConfigPath);
-			if (!this.active || generation !== this.generation) return;
+			if (!currentObservation()) return;
 			this.syncSettings(loaded.settings, ctx, displayRevision);
 			if (this.sourceBoundary && (this.sourceBoundary.source.managementUrl !== source.managementUrl ||
 				this.sourceBoundary.key !== loaded.settings.managementKey)) {
@@ -745,7 +748,7 @@ export class UsageController {
 				this.clearAllCaches();
 				this.rejectedManagementKey = undefined;
 			}
-			this.sourceBoundary = { source: structuredClone(source), key: loaded.settings.managementKey };
+			this.adoptSource(source, loaded.settings.managementKey);
 			this.notifySettingsWarnings(ctx, loaded);
 			this.publish(ctx);
 			const snapshot = this.getSnapshot(ctx);
@@ -765,7 +768,7 @@ export class UsageController {
 				formatSnapshotDetails(snapshot),
 			].join("\n"), snapshot.state === "setup-required" || snapshot.state === "error" || snapshot.partial || snapshot.stale || !loaded.writable ? "warning" : "info");
 		} catch (error) {
-			if (this.active && generation === this.generation && ctx.hasUI) {
+			if (currentObservation() && ctx.hasUI) {
 				ctx.ui.notify(`Failed to read usage status: ${safeUsageText(error instanceof Error ? error.message : String(error), [this.settingsSnapshot.managementKey])}`, "error");
 			}
 		}
