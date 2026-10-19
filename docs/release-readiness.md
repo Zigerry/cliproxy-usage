@@ -1,6 +1,6 @@
 # Release preparation and integration record
 
-Status: local integration and fault-injection validation passed; remote workflow CI and final completion review pending. This is not approval to merge or publish. Proposed next version: **0.6.0**, awaiting maintainer confirmation. No version has been changed, no release workflow dispatched, and no tag/npm/GitHub release mutation performed by this preparation.
+Status: local integration, fault-injection validation and remote workflow PR CI passed; final completion review pending. This is not approval to merge or publish. Proposed next version: **0.6.0**, awaiting maintainer confirmation. No version has been changed, no release workflow dispatched, and no tag/npm/GitHub release mutation performed by this preparation.
 
 ## Published baseline
 
@@ -17,7 +17,7 @@ The old Publish run `33156422268` was inspected read-only: queued since the hist
 | Engine-specific invalid configuration diagnostics were not stable across command paths | #27 / PR #33 | loader and real settings/setup/login/logout early-rejection paths; both SDKs 308 tests/types/pack |
 | Malformed supplied supported fields disappeared from usable subsets without a completeness warning | #28 / PR #34 | retained subset/history/unknown/recovery and HTTP/data-success separation; both SDKs 336 tests/types/pack |
 | Empty and literal fallback names could become indistinguishable in widget | #29 / PR #35 | effective labels and ordinals at narrow/normal widths; both SDKs 337 tests/types/pack |
-| Parallel release workflows could report GitHub success independently of npm, or blindly skip an existing version | #31 / release orchestration PR pending | single draft/verified-artifact path; helper/wiring/fault-injection and integrated checks below |
+| Parallel release workflows could report GitHub success independently of npm, or blindly skip an existing version | #31 / PR #36 | single draft/verified-artifact path; helper/wiring/fault-injection and integrated checks below |
 
 The startup concurrency regression test now waits on a real request barrier rather than a single setImmediate: filesystem scheduling is not a synchronization guarantee. Cache/manual-refresh assertions remain intact. No live provider or personal configuration was used in tests.
 
@@ -40,7 +40,7 @@ Inspected compressed artifact SRI:
 sha512-IKDYafcAilhUyBLbv6yw17iYR+rm5Nvh0r51isvyEuEYFUCv4XemHWtCwjGpqwduyE3c0FqhnnAYVKb+ELL/OA==
 ```
 
-These are **local integrated** results, not the remote CI matrix or a real release. Package/lock versions remain unchanged. Verification-only documentation added afterward does not change the inspected runtime files.
+These are **local integrated** results, not the remote CI matrix or a real release. PR #36's inherited locked-SDK remote CI also passed: run `39223124474`, job `117962903497` (1m16s). Runtime fix PRs #30 and #32–#35 have passing inherited CI. Package/lock versions remain unchanged. Verification-only documentation added afterward does not change the inspected runtime files.
 
 The inspection artifact still has the unchanged development manifest version 0.5.1. It is **not** the published 0.5.1 package and **must never be published** under that version. A separately approved 0.6.0 commit/tag must be rebuilt and verified by the pipeline; the eventual release hash will necessarily differ when its manifest/version changes.
 
@@ -58,7 +58,7 @@ The authorized workflow generates GitHub notes from merged changes and preserves
 
 1. Merge independent compatibility PR #15 to main, then A #16.
 2. Retarget and merge B #18, C #20, D #22 and E #24 in order.
-3. Retarget and merge audited fixes #30 -> #32 -> #33 -> #34 -> #35, then the #31 workflow PR.
+3. Retarget and merge audited fixes #30 -> #32 -> #33 -> #34 -> #35, then workflow PR #36 (#31).
 4. Prefer merge commits preserving stacked ancestry. If using squash/rebase, rebase/retarget each child and recheck its actual diff/CI; never merge a child only into its obsolete feature parent. Check main's final CI after integration, not just individual old PR checks.
 5. Only after explicit version/release approval, inspect the effective main version. If it is still 0.5.1 and 0.6.0 is approved, the manual main-only Bump input is minor. The old Bump workflow must not be triggered before the unified workflow changes are in main.
 6. The authorized Bump tests, bumps, atomically pushes main/tag and dispatches only Publish at that exact tag. See [release-process.md](release-process.md) for immutable tag/artifact checks, draft staging, npm verification, public finalization and failures.
