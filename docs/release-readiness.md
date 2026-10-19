@@ -1,6 +1,6 @@
 # Release preparation and integration record
 
-Status: local integration, fault-injection validation and remote workflow PR CI passed; final completion review pending. This is not approval to merge or publish. Proposed next version: **0.6.0**, awaiting maintainer confirmation. No version has been changed, no release workflow dispatched, and no tag/npm/GitHub release mutation performed by this preparation.
+Status: local integration, fault-injection validation, remote workflow PR CI and advisor preparation-completion review passed. Preparation is complete; explicit version/merge/release authorization is still required. This is not approval to merge or publish. Proposed next version: **0.6.0**, awaiting maintainer confirmation. No version has been changed, no release workflow dispatched, and no tag/npm/GitHub release mutation performed by this preparation.
 
 ## Published baseline
 
