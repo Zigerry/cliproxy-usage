@@ -1,0 +1,119 @@
+diff --git a/test/compatibility/fixture-template.ts.in b/test/compatibility/fixture-template.ts.in
+index 9d3a508..b116b20 100644
+--- a/test/compatibility/fixture-template.ts.in
++++ b/test/compatibility/fixture-template.ts.in
+@@ -26,6 +26,16 @@ export default function (pi: ExtensionAPI) {
+       ctx.ui.notify(`SMOKE_MODEL ${ctx.model?.id}`, 'info');
+     },
+   });
++  pi.registerCommand('compat-theme', {
++    description: 'Compatibility smoke: change theme through public host API',
++    handler: async (args, ctx) => {
++      const name = args.trim();
++      const result = ctx.ui.setTheme(name);
++      if (!result.success) throw new Error('Theme switch failed');
++      record({ kind: 'theme', name, paint: ctx.ui.theme.fg('success', 'quota') });
++      ctx.ui.notify(`SMOKE_THEME ${name}`, 'info');
++    },
++  });
+   pi.registerCommand('compat-exit', {
+     description: 'Compatibility smoke: orderly session shutdown',
+     handler: async (_args, ctx) => ctx.shutdown(),
+diff --git a/test/compatibility/network-guard.mjs b/test/compatibility/network-guard.mjs
+index 7bd0eca..6ed04b0 100644
+--- a/test/compatibility/network-guard.mjs
++++ b/test/compatibility/network-guard.mjs
+@@ -32,7 +32,7 @@ globalThis.fetch = async (input, init) => {
+       throw new Error('Unexpected synthetic account routing');
+     }
+     quotaRequests++;
+-    const used = quotaRequests === 1 ? 25 : 35;
++    const used = quotaRequests === 1 ? 25 : quotaRequests === 2 ? 35 : 45;
+     record({ kind: 'quota', count: quotaRequests, used });
+     return Response.json({ status_code: 200, body: JSON.stringify({ rate_limit: {
+       primary_window: { used_percent: used, limit_window_seconds: 604800, reset_after_seconds: 172800 },
+diff --git a/test/compatibility/smoke.py b/test/compatibility/smoke.py
+index 76db126..22db2fc 100644
+--- a/test/compatibility/smoke.py
++++ b/test/compatibility/smoke.py
+@@ -83,6 +83,13 @@ def run(variant, mode):
+         def wait(text):
+             child.expect_exact(text)
+             result['checks'].append(text)
++        def wait_all(texts):
++            # The host may repaint widget and custom screen in either order.
++            # Both must be fresh since the key() drain, not from an old screen.
++            remaining = list(texts)
++            while remaining:
++                index = child.expect_exact(remaining)
++                result['checks'].append(remaining.pop(index))
+         def drain_until_quiet():
+             # Consume pexpect's buffered tail and fresh output, so the next
+             # assertion cannot match a previous operation's redraw.
+@@ -124,13 +131,47 @@ def run(variant, mode):
+         wait('Enter/Esc close')
+         key('\r')
+         time.sleep(0.3)
++        command('/compat-theme light')
++        wait('SMOKE_THEME light')
++        command('/compat-theme dark')
++        wait('SMOKE_THEME dark')
+         command('/cliproxy-usage settings')
+         wait('CLIProxyAPI Usage Settings')
++        wait('Widget visibility')
+         wait('Refresh interval')
++        key('\r')
++        wait('Widget visibility: disabled')
+         key('\x1b')
+         time.sleep(0.3)
+         command('/cliproxy-usage status')
+         wait('Current usage provider: Codex')
++        wait('Widget: hidden')
++        command('/cliproxy-usage')
++        wait('CLIProxyAPI Usage')
++        wait('Enter/Esc close')
++        key('r')
++        child.expect(r'│[^\r\n]*7d[^\r\n]*left 55%[^\r\n]*resets in 2d[^\r\n]*│')
++        result['checks'].append('hidden details r: left 55%')
++        for columns in (30, 40):
++            drain_until_quiet()
++            child.setwinsize(40, columns)
++            child.expect(r'│[^\r\n]*7d[^\r\n]*left 55%')
++            child.expect(r'│[^\r\n]*5h[^\r\n]*left 90%')
++            result['checks'].append(f'resized details {columns}: complete 7d/5h quota fields')
++        drain_until_quiet()
++        child.setwinsize(40, 120)
++        wait('Enter/Esc close')
++        key('\x1b')
++        time.sleep(0.3)
++        command('/cliproxy-usage settings')
++        wait('CLIProxyAPI Usage Settings')
++        key('\r')
++        wait_all(['Widget visibility: enabled', 'left 55%'])
++        key('\x1b')
++        command('/cliproxy-usage status')
++        # The prefix is unchanged from the earlier status notification and the
++        # host may emit only its changed suffix. Require the new visibility row.
++        wait('Widget: shown')
+         wait('Last refresh:')
+         command('/compat-model unsupported')
+         wait('SMOKE_MODEL o3')
+@@ -145,12 +186,15 @@ def run(variant, mode):
+         assert child.exitstatus == 0 and child.signalstatus is None, (child.exitstatus, child.signalstatus)
+         assert not any(e['kind'] == 'blocked-network' for e in data), 'Network was attempted'
+         assert sum(e['kind'] == 'mock-restored' for e in data) == 1, data
+-        assert sum(e['kind'] == 'discovery' for e in data) == 2, data
+-        assert sum(e['kind'] == 'quota' for e in data) == 2, data
++        assert sum(e['kind'] == 'discovery' for e in data) == 3, data
++        assert sum(e['kind'] == 'quota' for e in data) == 3, data
++        paints = [e for e in data if e['kind'] == 'theme']
++        assert [e['name'] for e in paints] == ['light', 'dark'], data
++        assert paints[0]['paint'] != paints[1]['paint'], paints
+         assert any(e['kind'] == 'session-start' and e['mode'] == 'tui' and e['hasUI'] for e in data)
+         assert [e['id'] for e in data if e['kind'] == 'model'] == ['o3', 'gpt-4o'], data
+         assert sum(e['kind'] == 'shutdown' for e in data) == 1, data
+-        result.update(status='passed', exitstatus=child.exitstatus, quota_requests=2, unexpected_network=0)
++        result.update(status='passed', exitstatus=child.exitstatus, quota_requests=3, unexpected_network=0)
+     except Exception as exc:
+         result.update(status='failed', error=str(exc))
+         if child.isalive():

@@ -10,15 +10,14 @@ import { PROVIDER_LABELS } from "./providers.js";
 import {
 	configurationStatusText,
 	formatAccountSnapshotMetadata,
-	formatBalance,
-	formatResetTime,
 	formatRefreshEligibility,
-	remainingColor,
-	remainingPercent,
+	layoutAccountIdentity,
+	layoutBalance,
+	layoutProse,
+	layoutQuotaWindow,
 	snapshotStatusText,
-	usageBar,
 } from "./ui.js";
-import type { UsageSnapshot, UsageWindow } from "./types.js";
+import type { UsageSnapshot } from "./types.js";
 
 export type UsageDetailsState = {
 	getSnapshot: () => UsageSnapshot;
@@ -26,22 +25,6 @@ export type UsageDetailsState = {
 	onClose: () => void;
 	onDispose?: () => void;
 };
-
-function windowText(window: Readonly<UsageWindow>, now: number, theme: PiTheme): string {
-	const remaining = remainingPercent(window);
-	const bar = usageBar(remaining);
-	const filled = bar.match(/^━*/)?.[0] ?? "";
-	const empty = bar.slice(filled.length);
-	const reset = window.resetsAt
-		? ` · ${formatResetTime(window.resetsAt, now)}`
-		: "";
-	return (
-		`  ${theme.fg("muted", window.label)} ` +
-		`${theme.fg(remainingColor(remaining), filled)}${theme.fg("dim", empty)} ` +
-		`${theme.fg(remainingColor(remaining), `left ${Math.round(remaining)}%`)}` +
-		`${theme.fg("dim", reset)}`
-	);
-}
 
 /** Interactive, cache-backed account usage view shown by /cliproxy-usage. */
 export class UsageDetailsComponent implements Component {
@@ -100,49 +83,55 @@ export class UsageDetailsComponent implements Component {
 		if (this.disposed) return [];
 		const rows = Math.max(0, Math.floor(this.tui.terminal.rows));
 		if (rows === 0 || width <= 0) return [];
+		// Framing consumes columns before any semantic field is laid out.
+		const framed = rows >= 6 && width >= 4;
+		const innerWidth = framed ? width - 2 : width;
+		const indent = innerWidth >= 4 ? "  " : "";
+		const dataWidth = innerWidth - visibleWidth(indent);
 		const snapshot = this.state.getSnapshot();
 		const status = snapshotStatusText(snapshot) || "ready";
 		const statusColor = snapshot.state === "error" ? "error" : snapshot.refreshing ? "warning" : "dim";
-		const pinned = [this.theme.fg(statusColor, status)];
+		const pinned = layoutProse(this.theme.fg(statusColor, status), innerWidth);
 		const error = snapshot.error ?? snapshot.accounts
 			.filter((item) => item.error)
-			.map((item) => `${item.label || PROVIDER_LABELS[item.provider]}: ${item.error}`)
+			.map((item) => `${item.error} (${item.label || PROVIDER_LABELS[item.provider]})`)
 			.join(" · ");
 		const message = configurationStatusText(snapshot.configuration);
-		if (error || message) pinned.push(this.theme.fg("error", [error, message].filter(Boolean).join(" · ")));
+		if (error || message) pinned.push(truncateToWidth(this.theme.fg("error", [error, message].filter(Boolean).join(" · ")), innerWidth, "…"));
 
-		const body: string[] = formatRefreshEligibility(snapshot).map((line) => this.theme.fg("dim", line));
+		const body: string[] = formatRefreshEligibility(snapshot).flatMap((line) => layoutProse(this.theme.fg("dim", line), innerWidth));
 		if (body.length) body.push("");
-		for (const item of snapshot.accounts) {
+		for (const [index, item] of snapshot.accounts.entries()) {
 			const provider = this.theme.fg("accent", PROVIDER_LABELS[item.provider]);
 			const label = item.label || "remote";
-			body.push(`${provider} ${this.theme.fg("dim", "·")} ${this.theme.fg("text", label)}`);
+			body.push(layoutAccountIdentity(provider, label, index + 1, innerWidth, this.theme, innerWidth, " · ",
+				snapshot.accounts.some((other) => other !== item && (other.label || "remote") === label)));
+			let data: string[];
 			if (item.result === "unknown") {
-				body.push(this.theme.fg("dim", "  unknown"));
+				data = [this.theme.fg("dim", dataWidth >= 7 ? "unknown" : "…")];
 			} else if (item.balance) {
-				const unavailable = !item.balance.available || item.balance.amounts.every((value) => value.amount <= 0);
-				body.push(`  ${this.theme.fg(unavailable ? "error" : "text", formatBalance(item.balance) || "unknown")}`);
+				data = layoutBalance(item.balance, dataWidth, this.theme);
 			} else if (item.windows.length) {
-				for (const window of item.windows) body.push(windowText(window, snapshot.generatedAt, this.theme));
+				data = item.windows.flatMap((window) => layoutQuotaWindow(window, dataWidth, this.theme, 8, snapshot.generatedAt));
 			} else {
-				body.push(this.theme.fg("dim", `  ${item.result === "error" ? "error" : "unknown"}`));
+				data = layoutProse(this.theme.fg("dim", item.result === "error" ? "error" : "unknown"), dataWidth);
 			}
+			body.push(...data.map((line) => indent + line));
 			for (const metadata of formatAccountSnapshotMetadata(item, snapshot.generatedAt)) {
-				body.push(this.theme.fg(item.error ? "error" : "dim", `  ${metadata}`));
+				body.push(...layoutProse(this.theme.fg(item.error ? "error" : "dim", metadata), dataWidth).map((line) => indent + line));
 			}
 			body.push("");
 		}
 		while (body.at(-1) === "") body.pop();
 
 		// On tiny terminals keep the state and exit hint, sacrificing frame/body first.
-		const framed = rows >= 6 && width >= 4;
-		const innerWidth = framed ? width - 2 : width;
 		const shortFooter = innerWidth >= visibleWidth("r refresh · Enter/Esc close")
 			? "r refresh · Enter/Esc close" : "Esc close";
 		if (rows === 1) {
-			const close = visibleWidth(`${status} · Esc close`) <= width ? " · Esc close"
+			const compact = snapshot.state === "error" ? `error${snapshot.stale ? " · stale" : ""}` : status;
+			const close = visibleWidth(`${compact} · Esc close`) <= width ? " · Esc close"
 				: width >= 6 ? " · Esc" : "";
-			return [truncateToWidth(status, width - visibleWidth(close), "", false) + close];
+			return [truncateToWidth(compact, width - visibleWidth(close), "…", false) + close];
 		}
 		const visiblePinned = pinned.slice(0, Math.max(1, rows - (framed ? 3 : 1)));
 		const available = Math.max(0, rows - (framed ? 3 : 1) - visiblePinned.length);
@@ -150,15 +139,15 @@ export class UsageDetailsComponent implements Component {
 		this.scrollOffset = Math.min(this.scrollOffset, maxOffset);
 		const visibleBody = body.slice(this.scrollOffset, this.scrollOffset + available);
 		const footer = `${body.length > available && innerWidth >= visibleWidth(`↑↓ scroll · ${shortFooter}`) ? "↑↓ scroll · " : ""}${shortFooter}`;
-		const contents = [...visiblePinned, ...visibleBody, this.theme.fg("dim", footer)];
-		if (!framed) return contents.map((line) => truncateToWidth(line, width, "", false));
+		const contents = [...visiblePinned, ...visibleBody, this.theme.fg("dim", truncateToWidth(footer, innerWidth, "…"))];
+		if (!framed) return contents;
 
 		const title = truncateToWidth(" CLIProxyAPI Usage ", innerWidth, "", false);
 		const border = (text: string) => this.theme.fg("border", text);
 		const remaining = Math.max(0, innerWidth - visibleWidth(title));
 		const left = Math.floor(remaining / 2);
 		const top = border(`╭${"─".repeat(left)}`) + this.theme.fg("accent", title) + border(`${"─".repeat(remaining - left)}╮`);
-		const line = (content: string) => border("│") + truncateToWidth(content, innerWidth, "", true) + border("│");
+		const line = (content: string) => border("│") + content + " ".repeat(Math.max(0, innerWidth - visibleWidth(content))) + border("│");
 		return [top, ...contents.map(line), border(`╰${"─".repeat(innerWidth)}╯`)];
 	}
 

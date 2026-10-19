@@ -10,6 +10,8 @@ export type Settings = {
 	managementUrl: string;
 	/** Plaintext Management API key, stored only in the mode-0600 settings file. */
 	managementKey: string;
+	/** Presentation only; provider usage collection is independent of visibility. */
+	showWidget: boolean;
 	refreshMinutes: number;
 	maxVisibleAccounts: number;
 	providers: Record<ProviderName, boolean>;

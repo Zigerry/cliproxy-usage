@@ -6,6 +6,7 @@ import type { Settings } from "./types.js";
 export const DEFAULT_SETTINGS: Settings = {
 	managementUrl: "",
 	managementKey: "",
+	showWidget: true,
 	refreshMinutes: 5,
 	maxVisibleAccounts: 4,
 	providers: {
@@ -52,6 +53,11 @@ export function normalizeSettings(value: unknown): {
 		settings.managementKey = managementKey;
 	} else if (managementKey !== undefined) {
 		warnings.push("ignored invalid managementKey");
+	}
+	if (typeof value.showWidget === "boolean") {
+		settings.showWidget = value.showWidget;
+	} else if (value.showWidget !== undefined) {
+		warnings.push("ignored invalid showWidget");
 	}
 	if (
 		typeof value.refreshMinutes === "number" &&

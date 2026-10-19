@@ -24,6 +24,7 @@ import type { ProviderName, ProviderUsageState, RetryState, Settings, UsageConfi
 
 type RefreshRequest = {
 	readonly generation: number;
+	readonly displayRevision: number;
 	ctx: ExtensionContext;
 	providers: ProviderName[];
 	notifyProviders: ProviderName[];
@@ -59,6 +60,7 @@ export class UsageController {
 	private readonly detailsViews = new Set<{ provider: ProviderName; close: () => void }>();
 	private readonly refreshRequests = new Set<RefreshRequest>();
 	private generation = 0;
+	private displayRevision = 0;
 	private operation: RefreshOperation | undefined;
 	private sourceBoundary: { source: ManagementSource; key: string } | undefined;
 	private readonly changeListeners = new Set<() => void>();
@@ -73,6 +75,8 @@ export class UsageController {
 		this.refreshQueue = new CoalescingAsyncQueue<RefreshRequest>(
 			(current, next) => current.generation !== next.generation ? next : ({
 				generation: next.generation,
+				// Keep inherited loaded settings paired with their original display revision.
+				displayRevision: next.loaded ? next.displayRevision : current.loaded ? current.displayRevision : next.displayRevision,
 				ctx: next.ctx,
 				providers: uniqueProviders(current.providers, next.providers),
 				notifyProviders: uniqueProviders(
@@ -84,6 +88,16 @@ export class UsageController {
 			}),
 			(request) => this.runRefresh(request),
 		);
+	}
+
+	private adoptSettings(settings: Settings, observedDisplayRevision?: number): void {
+		const next = structuredClone(settings);
+		if (observedDisplayRevision !== undefined && observedDisplayRevision !== this.displayRevision) {
+			next.showWidget = this.settingsSnapshot.showWidget;
+		}
+		if (next.showWidget !== this.settingsSnapshot.showWidget) this.displayRevision++;
+		this.settingsSnapshot = next;
+		if (!next.showWidget) this.clearAgeTimer();
 	}
 
 	private providerForContext(ctx: ExtensionContext): ProviderName | undefined {
@@ -217,11 +231,12 @@ export class UsageController {
 		this.emitChange();
 	}
 
-	private requestRefresh(input: Omit<RefreshRequest, "generation">): Promise<void> {
+	private requestRefresh(input: Omit<RefreshRequest, "generation" | "displayRevision">): Promise<void> {
 		if (!this.active) return Promise.resolve();
 		const request: RefreshRequest = {
 			...input,
 			generation: this.generation,
+			displayRevision: this.displayRevision,
 			loaded: input.loaded ? { ...input.loaded, settings: structuredClone(input.loaded.settings) } : undefined,
 		};
 		this.refreshRequests.add(request);
@@ -234,6 +249,11 @@ export class UsageController {
 
 	renderCurrentModel(ctx: ExtensionContext): void {
 		if (!this.active) return;
+		if (!this.settingsSnapshot.showWidget) {
+			ctx.ui.setWidget("cliproxy-usage", undefined);
+			this.clearAgeTimer();
+			return;
+		}
 		const snapshot = this.getSnapshot(ctx);
 		renderUsage(ctx, snapshot, this.maxVisibleAccounts);
 		this.scheduleExpiry(ctx, snapshot);
@@ -336,7 +356,7 @@ export class UsageController {
 			this.scheduleRefresh(this.refreshContext ?? request.ctx, loaded.settings.refreshMinutes);
 		}
 		this.settingsKnown = true;
-		this.settingsSnapshot = structuredClone(loaded.settings);
+		this.adoptSettings(loaded.settings, request.displayRevision);
 		this.maxVisibleAccounts = loaded.settings.maxVisibleAccounts;
 		this.notifySettingsWarnings(request.ctx, loaded);
 		for (const provider of PROVIDERS) {
@@ -565,7 +585,7 @@ export class UsageController {
 		this.lastSettingsWarning = undefined;
 		this.active = true;
 		this.settingsKnown = true;
-		this.settingsSnapshot = structuredClone(loaded.settings);
+		this.adoptSettings(loaded.settings);
 		this.maxVisibleAccounts = loaded.settings.maxVisibleAccounts;
 		this.scheduleRefresh(ctx, loaded.settings.refreshMinutes);
 		this.reportBackgroundError(ctx, this.refreshCurrent(ctx, { loaded }));
@@ -615,10 +635,31 @@ export class UsageController {
 		changedId: string,
 	): Promise<void> {
 		if (!this.active) return;
+		const sourceChanged = settings.managementUrl !== this.settingsSnapshot.managementUrl ||
+			settings.managementKey !== this.settingsSnapshot.managementKey;
+		const changedProviders = PROVIDERS.filter((provider) => settings.providers[provider] !== this.settingsSnapshot.providers[provider]);
+		const displayOnly = changedId === "showWidget" && !sourceChanged && !changedProviders.length &&
+			settings.refreshMinutes === this.settingsSnapshot.refreshMinutes;
+		if (displayOnly) {
+			this.settingsKnown = true;
+			this.adoptSettings(settings);
+			this.maxVisibleAccounts = settings.maxVisibleAccounts;
+			this.publish(ctx);
+			return;
+		}
 		if (this.settingsInvalidateWork(settings)) this.invalidateWork(ctx);
 		this.settingsKnown = true;
-		this.settingsSnapshot = structuredClone(settings);
+		this.adoptSettings(settings);
 		this.scheduleRefresh(ctx, settings.refreshMinutes);
+		if (changedId === "showWidget" && !sourceChanged) {
+			// Combined real provider/interval changes still follow their own boundaries.
+			for (const provider of changedProviders) if (!settings.providers[provider]) this.clearProviderCache(provider);
+			this.maxVisibleAccounts = settings.maxVisibleAccounts;
+			this.publish(ctx);
+			const provider = this.providerForContext(ctx);
+			if (provider && changedProviders.includes(provider) && settings.providers[provider]) await this.refreshCurrent(ctx);
+			return;
+		}
 		if (changedId === "maxVisibleAccounts") {
 			this.maxVisibleAccounts = settings.maxVisibleAccounts;
 			this.publish(ctx);
@@ -649,7 +690,7 @@ export class UsageController {
 		if (ctx && this.timer) this.refreshContext = ctx;
 		else if (!ctx) this.clearRefreshTimer();
 		this.settingsKnown = true;
-		this.settingsSnapshot = structuredClone(settings);
+		this.adoptSettings(settings);
 		this.clearAllCaches();
 		this.sourceBoundary = undefined;
 		this.rejectedManagementKey = undefined;
@@ -657,7 +698,7 @@ export class UsageController {
 		this.emitChange();
 	}
 
-	syncSettings(settings: Settings, ctx?: ExtensionContext): void {
+	syncSettings(settings: Settings, ctx?: ExtensionContext, observedDisplayRevision?: number): void {
 		if (ctx && this.timer) {
 			this.refreshContext = ctx;
 			if (settings.refreshMinutes !== this.settingsSnapshot.refreshMinutes) this.scheduleRefresh(ctx, settings.refreshMinutes);
@@ -672,7 +713,7 @@ export class UsageController {
 		}
 		for (const provider of PROVIDERS) if (!settings.providers[provider]) this.clearProviderCache(provider);
 		this.settingsKnown = true;
-		this.settingsSnapshot = structuredClone(settings);
+		this.adoptSettings(settings, observedDisplayRevision);
 		this.maxVisibleAccounts = settings.maxVisibleAccounts;
 		if (ctx) this.renderCurrentModel(ctx);
 		this.emitChange();
@@ -691,12 +732,13 @@ export class UsageController {
 	async showStatus(ctx: ExtensionContext): Promise<void> {
 		if (!this.active) return;
 		const generation = this.generation;
+		const displayRevision = this.displayRevision;
 		try {
 			const loaded = await loadSettings(this.paths.settingsPath, this.paths.legacySettingsPath);
 			if (!this.active || generation !== this.generation) return;
 			const source = await resolveManagementSource(loaded.settings, this.paths.providerConfigPath);
 			if (!this.active || generation !== this.generation) return;
-			this.syncSettings(loaded.settings, ctx);
+			this.syncSettings(loaded.settings, ctx, displayRevision);
 			if (this.sourceBoundary && (this.sourceBoundary.source.managementUrl !== source.managementUrl ||
 				this.sourceBoundary.key !== loaded.settings.managementKey)) {
 				this.invalidateWork(ctx);
@@ -718,6 +760,7 @@ export class UsageController {
 				`Current usage provider: ${snapshot.provider ? PROVIDER_LABELS[snapshot.provider] : "unsupported"}`,
 				`Refresh: ${loaded.settings.refreshMinutes} min`,
 				`Visible accounts: ${loaded.settings.maxVisibleAccounts}`,
+				`Widget: ${this.settingsSnapshot.showWidget ? "shown" : "hidden"}`,
 				`Providers: ${providers.join(", ") || "none"}`,
 				formatSnapshotDetails(snapshot),
 			].join("\n"), snapshot.state === "setup-required" || snapshot.state === "error" || snapshot.partial || snapshot.stale || !loaded.writable ? "warning" : "info");

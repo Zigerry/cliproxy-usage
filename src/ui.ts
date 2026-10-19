@@ -2,21 +2,19 @@ import {
 	sliceByColumn,
 	truncateToWidth,
 	visibleWidth,
+	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { PROVIDER_LABELS } from "./providers.js";
 import type {
 	AccountUsage,
 	AccountUsageSnapshot,
 	BalanceAmount,
-	ProviderName,
 	ReadonlyAccountBalance,
 	Theme,
 	UiContext,
 	UsageWindow,
 	UsageSnapshot,
 } from "./types.js";
-
-const CLAUDE_ORANGE = "\u001b[38;5;208m";
 
 /** Remaining quota in percent, clamped to 0-100. */
 export function remainingPercent(window: Readonly<UsageWindow>): number {
@@ -67,10 +65,82 @@ function formatDetailWindow(window: Readonly<UsageWindow>, now: number): string 
 }
 
 function fitLabel(text: string, width: number): string {
+	if (width <= 0) return "";
 	if (visibleWidth(text) <= width) return text;
-	const ellipsis = "…";
-	const contentWidth = Math.max(0, width - visibleWidth(ellipsis));
-	return `${sliceByColumn(text, 0, contentWidth, true)}${ellipsis}`;
+	return `${sliceByColumn(text, 0, Math.max(0, width - 1), true)}…`;
+}
+
+/** Prose only: never use this to fit a quota or amount. Input is sanitized snapshot text. */
+export function layoutProse(text: string, width: number): string[] {
+	if (width <= 0) return [];
+	return wrapTextWithAnsi(text, width).map((line) => truncateToWidth(line, width, "…"));
+}
+
+function omitted(field: string, width: number): string {
+	const text = `[${field} omitted]`;
+	return visibleWidth(text) <= width ? text : width > 0 ? "…" : "";
+}
+
+/** Keep the window label and complete remaining percentage together, before decoration. */
+export function layoutQuotaWindow(
+	window: Readonly<UsageWindow>, width: number, theme: Theme, barWidth = 8, now?: number,
+): string[] {
+	if (width <= 0) return [];
+	const remaining = remainingPercent(window);
+	const color = remainingColor(remaining);
+	const left = `left ${Math.round(remaining)}%`;
+	const minimum = `${window.label} ${left}`;
+	if (visibleWidth(minimum) > width) return [theme.fg("dim", omitted("quota", width))];
+	const size = [8, 6, 4, 0].find((size) => size <= barWidth && visibleWidth(minimum) + (size ? size + 1 : 0) <= width) ?? 0;
+	const bar = usageBar(remaining, size);
+	const filled = bar.match(/^━*/)?.[0] ?? "";
+	const meter = size ? `${theme.fg(color, filled)}${theme.fg("dim", bar.slice(filled.length))} ` : "";
+	const quota = `${theme.fg("muted", window.label)} ${meter}${theme.fg(color, left)}`;
+	if (now === undefined || !window.resetsAt) return [quota];
+	const reset = formatResetTime(window.resetsAt, now);
+	if (visibleWidth(quota) + 3 + visibleWidth(reset) <= width) return [`${quota}${theme.fg("dim", ` · ${reset}`)}`];
+	return [quota, theme.fg("dim", visibleWidth(reset) <= width ? reset : omitted("reset", width))];
+}
+
+function packFields(fields: readonly string[], width: number, separator: string): string[] {
+	const lines: string[] = [];
+	for (const field of fields) {
+		const previous = lines.at(-1);
+		if (previous !== undefined && visibleWidth(previous) + visibleWidth(separator) + visibleWidth(field) <= width) {
+			lines[lines.length - 1] = previous + separator + field;
+		} else lines.push(field);
+	}
+	return lines;
+}
+
+/** Multiline cards keep these rows together; no final whole-row truncation. */
+export function layoutQuotaWindows(
+	windows: readonly Readonly<UsageWindow>[], width: number, theme: Theme, barWidth = 8,
+): string[] {
+	const plain: Theme = { fg: (_color, text) => text };
+	const candidates = [8, 6, 4, 0].filter((size) => size <= barWidth).map((size) => ({ size,
+		rows: packFields(windows.flatMap((window) => layoutQuotaWindow(window, width, plain, size)), width, " │ "),
+	}));
+	const best = candidates.sort((a, b) => a.rows.length - b.rows.length)[0];
+	return packFields(windows.flatMap((window) => layoutQuotaWindow(window, width, theme, best?.size ?? 0)), width, theme.fg("dim", " │ "));
+}
+
+/** Distinguish shortened/colliding public labels without exposing opaque account IDs. */
+export function layoutAccountIdentity(
+	provider: string, label: string, ordinal: number, width: number, theme: Theme,
+	labelLimit = width, separator = " │ ", numbered = false,
+): string {
+	if (width <= 0) return "";
+	if (!label && numbered) label = "remote";
+	if (!label) return fitLabel(provider, width);
+	let prefix = provider ? provider + theme.fg("dim", separator) : "";
+	if (width - visibleWidth(prefix) < 6) prefix = "";
+	const budget = Math.max(0, Math.min(labelLimit, width - visibleWidth(prefix)));
+	const suffix = numbered || visibleWidth(label) > budget ? ` #${ordinal}` : "";
+	const identity = suffix
+		? budget >= visibleWidth(suffix) ? fitLabel(label, budget - visibleWidth(suffix)) + suffix : fitLabel(`#${ordinal}`, budget)
+		: label;
+	return prefix + theme.fg("muted", identity);
 }
 
 export function formatBalanceAmount(value: Readonly<BalanceAmount>): string {
@@ -89,8 +159,33 @@ export function formatBalanceAmount(value: Readonly<BalanceAmount>): string {
 		: `${amount} ${currency}`;
 }
 
+function balanceFields(balance: ReadonlyAccountBalance): string[] {
+	const symbols = new Map<string, Set<string>>();
+	for (const value of balance.amounts) {
+		const currency = value.currency.toUpperCase();
+		const symbol = currency === "CNY" || currency === "JPY" || currency === "RMB" ? "¥" : currency;
+		const codes = symbols.get(symbol) ?? new Set<string>();
+		codes.add(currency);
+		symbols.set(symbol, codes);
+	}
+	return balance.amounts.map((value) => {
+		const currency = value.currency.toUpperCase();
+		const ambiguous = ["CNY", "JPY", "RMB"].includes(currency) && (symbols.get("¥")?.size ?? 0) > 1;
+		return formatBalanceAmount(value) + (ambiguous ? ` ${currency}` : "");
+	});
+}
+
 export function formatBalance(balance: ReadonlyAccountBalance): string {
-	return balance.amounts.map(formatBalanceAmount).join(" / ");
+	return balanceFields(balance).join(" / ");
+}
+
+/** Amount, sign and required currency identifier are a single field. */
+export function layoutBalance(balance: ReadonlyAccountBalance, width: number, theme: Theme): string[] {
+	if (width <= 0) return [];
+	const unavailable = !balance.available || balance.amounts.every((value) => value.amount <= 0);
+	const fields = balanceFields(balance).map((field) => visibleWidth(field) <= width
+		? theme.fg(unavailable ? "error" : "text", field) : theme.fg("dim", omitted("balance", width)));
+	return packFields(fields, width, theme.fg("dim", " / "));
 }
 
 function itemPriority(item: AccountUsageSnapshot): number {
@@ -264,115 +359,81 @@ export function renderUsage(
 					providers.size === 1 && visibleItems.length > 1
 						? visibleItems[0]?.provider
 						: undefined;
-				const styledProvider = (provider: ProviderName, text: string) =>
-					provider === "claude"
-						? `${CLAUDE_ORANGE}${text}\u001b[0m`
-						: theme.fg("text", text);
+				const styledProvider = (text: string) => theme.fg("text", text);
 				const labelLimit = visibleItems.length > 1 ? 18 : 24;
-				const buildCards = (barWidth: number, styled: boolean) =>
+				const plainTheme: Theme = { fg: (_color, text) => text };
+				const buildCards = (barWidth: number, styled: boolean): string[][] =>
 					visibleItems.map((item) => {
-						const paint = (color: string, text: string) =>
-							styled ? theme.fg(color, text) : text;
-						const separator = paint("dim", " │ ");
-						const account = paint("muted", fitLabel(item.label, labelLimit));
-						const provider = styled
-							? styledProvider(item.provider, PROVIDER_LABELS[item.provider])
-							: PROVIDER_LABELS[item.provider];
-						const prefix = groupedProvider
-							? item.label
-								? account + separator
-								: ""
-							: provider + separator + (item.label ? account + separator : "");
-						let content: string;
-						if (item.result === "unknown") {
-							content = paint("dim", "unknown");
-						} else if (item.balance) {
-							const amount = formatBalance(item.balance);
-							const unavailable =
-								!item.balance.available ||
-								item.balance.amounts.every((value) => value.amount <= 0);
-							content = amount
-								? paint(unavailable ? "error" : "text", amount)
-								: paint("dim", "–");
-						} else {
-							const meters = item.windows.map((window) => {
-								const remaining = remainingPercent(window);
-								const color = remainingColor(remaining);
-								const bar = usageBar(remaining, barWidth);
-								const filled = bar.match(/^━*/)?.[0] ?? "";
-								const empty = bar.slice(filled.length);
-								return [
-									paint("muted", window.label),
-									`${paint(color, filled)}${paint("dim", empty)}`,
-									paint(color, `left ${Math.round(remaining)}%`),
-								].join(" ");
-							});
-							content = meters.length
-								? meters.join(paint("dim", " │ "))
-								: paint("dim", item.result === "error" ? "" : "unknown");
-						}
+						const paintTheme = styled ? theme : plainTheme;
+						const paint = (color: string, text: string) => paintTheme.fg(color, text);
+						const ordinal = items.indexOf(item) + 1;
+						const label = item.label || (visibleItems.length > 1 ? "remote" : "");
+						const numbered = items.some((other) => other !== item && other.label === item.label);
+						const provider = groupedProvider ? "" : styled
+							? styledProvider(PROVIDER_LABELS[item.provider]) : PROVIDER_LABELS[item.provider];
+						const identity = (budget: number) => layoutAccountIdentity(provider, label, ordinal, budget, paintTheme, labelLimit, " │ ", numbered);
+						const data = (budget: number, size = barWidth): string[] => item.result === "unknown"
+							? [paint("dim", budget >= 7 ? "unknown" : omitted("unknown", budget))]
+							: item.balance ? layoutBalance(item.balance, budget, paintTheme)
+							: item.windows.length ? layoutQuotaWindows(item.windows, budget, paintTheme, size)
+							: [paint("dim", budget >= 7 ? (item.result === "error" ? "error" : "unknown") : omitted(item.result === "error" ? "error" : "unknown", budget))];
 						const annotations = [
-							...(item.cached ? ["cached"] : []),
-							...(item.stale ? ["stale"] : []),
-							...(item.error ? [`! ${item.error}`] : item.result === "error" ? ["error"] : []),
-						];
-						if (annotations.length) content += paint(item.error ? "error" : "dim", `${content ? " · " : ""}${annotations.join(" · ")}`);
-						const card = `${prefix}${content}`;
-						return truncateToWidth(card, width, "");
-					});
-				const packCards = (cards: string[]): string[][] => {
-					const rows: string[][] = [];
-					let row: string[] = [];
-					let rowWidth = 0;
-					for (const card of cards) {
-						const cardWidth = visibleWidth(card);
-						const nextWidth =
-							rowWidth + (row.length ? gap : 0) + cardWidth;
-						if (row.length && (row.length >= 3 || nextWidth > width)) {
-							rows.push(row);
-							row = [];
-							rowWidth = 0;
+							...(item.cached ? ["cached"] : []), ...(item.stale ? ["stale"] : []),
+							...(item.error ? [`error: ${item.error}`] : item.result === "error" ? ["error"] : []),
+						].join(" · ");
+						// Try a single row, shortening identity before meters. Never fit by
+						// cutting a completed quota/balance row or its freshness annotation.
+						for (const size of [8, 6, 4, 0].filter((size) => size <= barWidth)) {
+							const fullData = data(Number.MAX_SAFE_INTEGER, size).join(paint("dim", " │ "));
+							const content = fullData + (annotations ? paint(item.error ? "error" : "dim", ` · ${annotations}`) : "");
+							const identityBudget = width - visibleWidth(content) - 3;
+							const providerWidth = provider ? visibleWidth(provider) + (label ? 3 : 0) : 0;
+							if (identityBudget >= providerWidth + (label ? 6 : 0)) {
+								const header = identity(identityBudget);
+								return [header + (header ? paint("dim", " │ ") : "") + content];
+							}
 						}
-						rowWidth += (row.length ? gap : 0) + cardWidth;
-						row.push(card);
+						const indent = width >= 4 ? "  " : "";
+						const bodyWidth = width - visibleWidth(indent);
+						return [identity(width), ...data(bodyWidth).map((line) => indent + line),
+							...[[item.cached ? "cached" : "", item.stale ? "stale" : ""].filter(Boolean).join(" · "),
+								item.error ? `error: ${item.error}` : item.result === "error" ? "error" : ""]
+								.filter(Boolean).flatMap((text) => layoutProse(paint(item.error ? "error" : "dim", text), bodyWidth))
+								.map((line) => indent + line)];
+					});
+				const packCards = (cards: string[][]): string[] => {
+					const rows: string[] = [];
+					let row: string[] = [];
+					const flush = () => { if (row.length) rows.push(row.join(" ".repeat(gap))); row = []; };
+					for (const card of cards) {
+						if (card.length !== 1) { flush(); rows.push(...card); continue; }
+						const next = card[0] ?? "";
+						if (row.length && (row.length >= 3 || visibleWidth(row.join(" ".repeat(gap))) + gap + visibleWidth(next) > width)) flush();
+						row.push(next);
 					}
-					if (row.length) rows.push(row);
+					flush();
 					return rows;
 				};
-				const candidates = [8, 6, 4].map((barWidth) => {
-					const rows = packCards(buildCards(barWidth, false));
-					return {
-						barWidth,
-						rows,
-						maxColumns: Math.max(0, ...rows.map((row) => row.length)),
-					};
-				});
-				candidates.sort(
-					(left, right) =>
-						left.rows.length - right.rows.length ||
-						right.maxColumns - left.maxColumns ||
-						right.barWidth - left.barWidth,
-				);
-				const layout = candidates[0];
-				const rows = packCards(buildCards(layout?.barWidth ?? 8, true));
-				const lines: string[] = status
-					? [truncateToWidth(theme.fg("dim", status), width, "")] : [];
+				const candidates = [8, 6, 4].map((barWidth) => ({ barWidth, rows: packCards(buildCards(barWidth, false)) }));
+				candidates.sort((a, b) => a.rows.length - b.rows.length || b.barWidth - a.barWidth);
+				const rows = packCards(buildCards(candidates[0]?.barWidth ?? 8, true));
+				const lines: string[] = status ? layoutProse(theme.fg("dim", status), width) : [];
 				if (groupedProvider) {
 					const count = items.length;
 					const kind = groupedProvider === "deepseek" ? "balance" : "quota";
 					lines.push(
 						truncateToWidth(
-							`${styledProvider(groupedProvider, PROVIDER_LABELS[groupedProvider])} ${theme.fg(
+							`${styledProvider(PROVIDER_LABELS[groupedProvider])} ${theme.fg(
 								"dim",
 								`${kind} · ${count} account${count === 1 ? "" : "s"}`,
 							)}`,
 							width,
-							"",
+							"…",
 						),
 					);
 				}
 				for (const row of rows) {
-					lines.push(row.join(" ".repeat(gap)));
+					lines.push(row);
 				}
 				if (hiddenCount) {
 					lines.push(
@@ -382,7 +443,7 @@ export function renderUsage(
 								`… ${hiddenCount} more account${hiddenCount === 1 ? "" : "s"} · /cliproxy-usage for details`,
 							),
 							width,
-							"",
+							"…",
 						),
 					);
 				}

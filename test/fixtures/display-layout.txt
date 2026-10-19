@@ -1,0 +1,185 @@
+Synthetic renderer output; ANSI removed. Regenerate: UPDATE_LAYOUT_FIXTURES=1 node --import tsx --test test/layout.test.ts
+
+=== quota widget 30 ===
+refreshing · error · stale ·
+cached
+Codex quota · 2 accounts
+共同前缀👩‍💻é-ve… #1
+  7d left 100% │ 5h left 0%
+  cached · stale
+  error: HTTP 503 offline
+共同前缀👩‍💻é-ve… #2
+  7d left 100% │ 5h left 0%
+  cached · stale
+  error: HTTP 503 offline
+
+=== quota details 30 ===
+╭──── CLIProxyAPI Usage ─────╮
+│refreshing · error · stale ·│
+│cached                      │
+│HTTP 503 offline (共同前缀… │
+│Codex · 共同前缀👩‍💻é-very… #1│
+│  7d ━━━━━━━━ left 100%     │
+│  resets in 2m              │
+│  5h ──────── left 0%       │
+│  data age: 2m · cached ·   │
+│  stale · error: HTTP 503   │
+│  offline                   │
+│                            │
+│Codex · 共同前缀👩‍💻é-very… #2│
+│  7d ━━━━━━━━ left 100%     │
+│  resets in 2m              │
+│  5h ──────── left 0%       │
+│  data age: 2m · cached ·   │
+│  stale · error: HTTP 503   │
+│  offline                   │
+│r refresh · Enter/Esc close │
+╰────────────────────────────╯
+
+=== quota widget 40 ===
+refreshing · error · stale · cached
+Codex quota · 2 accounts
+共同前缀👩‍💻é-ve… #1
+  7d ━━━━ left 100% │ 5h ──── left 0%
+  cached · stale
+  error: HTTP 503 offline
+共同前缀👩‍💻é-ve… #2
+  7d ━━━━ left 100% │ 5h ──── left 0%
+  cached · stale
+  error: HTTP 503 offline
+
+=== quota details 40 ===
+╭───────── CLIProxyAPI Usage ──────────╮
+│refreshing · error · stale · cached   │
+│HTTP 503 offline (共同前缀👩‍💻é-very-lo…│
+│Codex · 共同前缀👩‍💻é-very-long-acco… #1│
+│  7d ━━━━━━━━ left 100% · resets in 2m│
+│  5h ──────── left 0%                 │
+│  data age: 2m · cached · stale ·     │
+│  error: HTTP 503 offline             │
+│                                      │
+│Codex · 共同前缀👩‍💻é-very-long-acco… #2│
+│  7d ━━━━━━━━ left 100% · resets in 2m│
+│  5h ──────── left 0%                 │
+│  data age: 2m · cached · stale ·     │
+│  error: HTTP 503 offline             │
+│r refresh · Enter/Esc close           │
+╰──────────────────────────────────────╯
+
+=== quota widget 80 ===
+refreshing · error · stale · cached
+Codex quota · 2 accounts
+共同… #1 │ 7d left 100% │ 5h left 0% · cached · stale · error: HTTP 503 offline
+共同… #2 │ 7d left 100% │ 5h left 0% · cached · stale · error: HTTP 503 offline
+
+=== quota details 80 ===
+╭───────────────────────────── CLIProxyAPI Usage ──────────────────────────────╮
+│refreshing · error · stale · cached                                           │
+│HTTP 503 offline (共同前缀👩‍💻é-very-long-account-one@example.invalid) · HTTP 5…│
+│Codex · 共同前缀👩‍💻é-very-long-account-one@example.invalid                     │
+│  7d ━━━━━━━━ left 100% · resets in 2m                                        │
+│  5h ──────── left 0%                                                         │
+│  data age: 2m · cached · stale · error: HTTP 503 offline                     │
+│                                                                              │
+│Codex · 共同前缀👩‍💻é-very-long-account-two@example.invalid                     │
+│  7d ━━━━━━━━ left 100% · resets in 2m                                        │
+│  5h ──────── left 0%                                                         │
+│  data age: 2m · cached · stale · error: HTTP 503 offline                     │
+│r refresh · Enter/Esc close                                                   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+=== quota widget 120 ===
+refreshing · error · stale · cached
+Codex quota · 2 accounts
+共同前缀👩‍💻é-ve… #1 │ 7d ━━━━━━━━ left 100% │ 5h ──────── left 0% · cached · stale · error: HTTP 503 offline
+共同前缀👩‍💻é-ve… #2 │ 7d ━━━━━━━━ left 100% │ 5h ──────── left 0% · cached · stale · error: HTTP 503 offline
+
+=== quota details 120 ===
+╭───────────────────────────────────────────────── CLIProxyAPI Usage ──────────────────────────────────────────────────╮
+│refreshing · error · stale · cached                                                                                   │
+│HTTP 503 offline (共同前缀👩‍💻é-very-long-account-one@example.invalid) · HTTP 503 offline (共同前缀👩‍💻é-very-long-accoun…│
+│Codex · 共同前缀👩‍💻é-very-long-account-one@example.invalid                                                             │
+│  7d ━━━━━━━━ left 100% · resets in 2m                                                                                │
+│  5h ──────── left 0%                                                                                                 │
+│  data age: 2m · cached · stale · error: HTTP 503 offline                                                             │
+│                                                                                                                      │
+│Codex · 共同前缀👩‍💻é-very-long-account-two@example.invalid                                                             │
+│  7d ━━━━━━━━ left 100% · resets in 2m                                                                                │
+│  5h ──────── left 0%                                                                                                 │
+│  data age: 2m · cached · stale · error: HTTP 503 offline                                                             │
+│r refresh · Enter/Esc close                                                                                           │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+=== balance widget 30 ===
+refreshing · error · stale ·
+cached
+DeepSeek │ 共同前缀👩‍💻é-ver… #1
+  $0.00 / €-1234.56
+  ¥12.34 CNY / ¥56.78 JPY
+  cached · stale
+  error: HTTP 503 offline
+
+=== balance details 30 ===
+╭──── CLIProxyAPI Usage ─────╮
+│refreshing · error · stale ·│
+│cached                      │
+│HTTP 503 offline (共同前缀… │
+│DeepSeek · 共同前缀👩‍💻é-v… #1│
+│  $0.00 / €-1234.56         │
+│  ¥12.34 CNY / ¥56.78 JPY   │
+│  data age: 2m · cached ·   │
+│  stale · error: HTTP 503   │
+│  offline                   │
+│r refresh · Enter/Esc close │
+╰────────────────────────────╯
+
+=== balance widget 40 ===
+refreshing · error · stale · cached
+DeepSeek │ 共同前缀👩‍💻é-very-lon… #1
+  $0.00 / €-1234.56 / ¥12.34 CNY
+  ¥56.78 JPY
+  cached · stale
+  error: HTTP 503 offline
+
+=== balance details 40 ===
+╭───────── CLIProxyAPI Usage ──────────╮
+│refreshing · error · stale · cached   │
+│HTTP 503 offline (共同前缀👩‍💻é-very-lo…│
+│DeepSeek · 共同前缀👩‍💻é-very-long-a… #1│
+│  $0.00 / €-1234.56 / ¥12.34 CNY      │
+│  ¥56.78 JPY                          │
+│  data age: 2m · cached · stale ·     │
+│  error: HTTP 503 offline             │
+│r refresh · Enter/Esc close           │
+╰──────────────────────────────────────╯
+
+=== balance widget 80 ===
+refreshing · error · stale · cached
+DeepSeek │ 共同前缀👩‍💻é-very-lon… #1
+  $0.00 / €-1234.56 / ¥12.34 CNY / ¥56.78 JPY
+  cached · stale
+  error: HTTP 503 offline
+
+=== balance details 80 ===
+╭───────────────────────────── CLIProxyAPI Usage ──────────────────────────────╮
+│refreshing · error · stale · cached                                           │
+│HTTP 503 offline (共同前缀👩‍💻é-very-long-account-one@example.invalid)          │
+│DeepSeek · 共同前缀👩‍💻é-very-long-account-one@example.invalid                  │
+│  $0.00 / €-1234.56 / ¥12.34 CNY / ¥56.78 JPY                                 │
+│  data age: 2m · cached · stale · error: HTTP 503 offline                     │
+│r refresh · Enter/Esc close                                                   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+=== balance widget 120 ===
+refreshing · error · stale · cached
+DeepSeek │ 共同前缀👩‍💻é-very… #1 │ $0.00 / €-1234.56 / ¥12.34 CNY / ¥56.78 JPY · cached · stale · error: HTTP 503 offline
+
+=== balance details 120 ===
+╭───────────────────────────────────────────────── CLIProxyAPI Usage ──────────────────────────────────────────────────╮
+│refreshing · error · stale · cached                                                                                   │
+│HTTP 503 offline (共同前缀👩‍💻é-very-long-account-one@example.invalid)                                                  │
+│DeepSeek · 共同前缀👩‍💻é-very-long-account-one@example.invalid                                                          │
+│  $0.00 / €-1234.56 / ¥12.34 CNY / ¥56.78 JPY                                                                         │
+│  data age: 2m · cached · stale · error: HTTP 503 offline                                                             │
+│r refresh · Enter/Esc close                                                                                           │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
