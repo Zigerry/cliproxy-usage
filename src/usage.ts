@@ -204,9 +204,13 @@ function parseUsageResponse(
 		return parsed;
 	}
 	if (provider === "deepseek") {
-		const parsed = parseDeepSeek(response.body);
-		if (!parsed.balance?.amounts.length) throw new Error("missing balance");
-		return parsed;
+		if (!record(response.body) ||
+			(response.body.is_available !== undefined && typeof response.body.is_available !== "boolean") ||
+			(response.body.balance_infos !== undefined && (!Array.isArray(response.body.balance_infos) ||
+				!response.body.balance_infos.every(record)))) {
+			throw new Error("invalid balance response");
+		}
+		return parseDeepSeek(response.body);
 	}
 	if (provider === "kimi") return parseKimi(response.body);
 	return parseGrok(response.body);
@@ -270,6 +274,7 @@ async function managementRequest(
 	} catch (error) {
 		// Parent cancellation is operation control, not a provider failure/timeout.
 		parent?.throwIfAborted();
+		if (error instanceof SyntaxError) throw new Error("invalid management JSON response");
 		throw error;
 	}
 }
@@ -452,12 +457,13 @@ async function remoteUsageRequest(
 	return { body, headers: remoteHeaders(result.header) };
 }
 
-function failedAccount(auth: RemoteAuthFile, provider: ProviderName, message: string): AccountUsage {
+function failedAccount(auth: RemoteAuthFile, provider: ProviderName, message: string, queried = false): AccountUsage {
 	const id = accountId(auth.auth_index);
 	return {
 		provider,
 		...(id !== undefined ? { accountId: id } : {}),
 		label: remoteLabel(auth),
+		queried,
 		windows: [],
 		error: message,
 	};
@@ -471,10 +477,11 @@ async function fetchRemoteUsage(
 	signal?: AbortSignal,
 ): Promise<{ item: AccountUsage; managementAuthFailed: boolean }> {
 	signal?.throwIfAborted();
+	let queried = false;
 	try {
-		if (auth.unavailable) {
-			throw new Error(auth.status_message || auth.status || "unavailable");
-		}
+		if (auth.unavailable) throw new Error("account unavailable");
+		if (!accountId(auth.auth_index)) throw new Error("missing remote auth_index");
+		queried = true;
 		const response = await remoteUsageRequest(baseUrl, managementKey, auth, provider, signal);
 		signal?.throwIfAborted();
 		const id = accountId(auth.auth_index);
@@ -483,6 +490,7 @@ async function fetchRemoteUsage(
 				provider,
 				...(id !== undefined ? { accountId: id } : {}),
 				label: remoteLabel(auth),
+				queried,
 				...parseUsageResponse(provider, response),
 			},
 			managementAuthFailed: false,
@@ -490,7 +498,7 @@ async function fetchRemoteUsage(
 	} catch (error) {
 		signal?.throwIfAborted();
 		return {
-			item: failedAccount(auth, provider, managementErrorMessage(error)),
+			item: failedAccount(auth, provider, managementErrorMessage(error), queried),
 			managementAuthFailed: isManagementAuthFailure(error),
 		};
 	}
