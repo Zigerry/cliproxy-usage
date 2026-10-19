@@ -21,14 +21,15 @@ Issue #21, stacked on C PR #20 (`feat/19-usage-state`). Implementation and resul
 - All 10 initial Controller eligibility regressions failed before Controller integration.
 - Targeted follow-up review found the no-header 429/unstarted-discovery and skipped-discovery timestamp gaps. Six focused regressions failed before those fixes, including cached provider and pure-state assertions.
 - A further failing metadata regression ensures rejected Management access is accurately shown as force-revalidatable, while notification alone does not bypass rejection.
+- Completion review found incomplete mixed provider-success/Management-error rounds could clear an existing provider local streak. Controller and pure-policy regressions failed first; an explicit round-completeness observation now preserves local facts on incomplete rounds while still collecting actual server instructions or incrementing real temporary failures. Both SDK matrices and all three terminal runs were repeated after the fix.
 - B/C tests retain their original cache/isolation assertions; immediate retries that intentionally test state transitions now explicitly force local-backoff bypass. The bounded details test also inspects the scrolled second account rather than dropping its cached-quota assertion.
 
 ## Validation
 
 | Environment | Tests | Types | Package |
 | --- | --- | --- | --- |
-| Locked SDK `0.80.10` | 236 passed, 0 failed/cancelled | passed | passed |
-| Isolated SDK `1.3.0` | 236 passed, 0 failed/cancelled | passed | passed |
+| Locked SDK `0.80.10` | 238 passed, 0 failed/cancelled | passed | passed |
+| Isolated SDK `1.3.0` | 238 passed, 0 failed/cancelled | passed | passed |
 
 The HTTP/policy core commit was independently verified from its staged tree: 220 tests and types passed. Final packages contain 18 allowlisted files including the two new pure modules; no tests/design reports are shipped. git diff --check passes; package.json, package-lock.json and runtime dependencies are unchanged.
 
