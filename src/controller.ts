@@ -9,6 +9,7 @@ import { CoalescingAsyncQueue } from "./refresh.js";
 import { deriveEligibility, isEligible, updateRetry } from "./retry.js";
 import {
 	DEFAULT_SETTINGS,
+	effectiveRefreshMinutes,
 	type LoadedSettings,
 	loadSettings,
 } from "./settings.js";
@@ -95,6 +96,7 @@ export class UsageController {
 
 	private adoptSettings(settings: Settings, observedDisplayRevision?: number): void {
 		const next = structuredClone(settings);
+		next.refreshMinutes = effectiveRefreshMinutes(next.refreshMinutes);
 		if (observedDisplayRevision !== undefined && observedDisplayRevision !== this.displayRevision) {
 			next.showWidget = this.settingsSnapshot.showWidget;
 		}
@@ -405,7 +407,7 @@ export class UsageController {
 		const results = await readAccounts(loaded.settings, { source, providers: operation.providers, signal: operation.controller.signal });
 		if (!this.owns(operation)) return;
 		const completedAt = Date.now();
-		const intervalMs = loaded.settings.refreshMinutes * 60_000;
+		const intervalMs = this.settingsSnapshot.refreshMinutes * 60_000;
 		this.managementRetry = updateRetry(this.managementRetry,
 			results.management ?? { attempted: false, failures: [] }, completedAt, intervalMs);
 		for (const result of results.providers) {
@@ -574,7 +576,7 @@ export class UsageController {
 	private scheduleRefresh(ctx: ExtensionContext, minutes: number): void {
 		this.clearRefreshTimer();
 		this.refreshContext = ctx;
-		const intervalMs = minutes * 60_000;
+		const intervalMs = effectiveRefreshMinutes(minutes) * 60_000;
 		this.nextAutomaticCheckAt = Date.now() + intervalMs;
 		this.timer = setInterval(() => {
 			if (!this.active || !this.refreshContext) return;

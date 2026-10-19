@@ -194,3 +194,17 @@ test("showWidget save failure preserves the target and cleans its atomic tempora
 		await rm(dir, { recursive: true, force: true });
 	}
 });
+
+test("refresh interval accepts only safe whole minutes within the native timer limit", () => {
+	for (const refreshMinutes of [1, 5, 35791]) {
+		const loaded = normalizeSettings({ refreshMinutes });
+		assert.equal(loaded.settings.refreshMinutes, refreshMinutes);
+		assert.deepEqual(loaded.warnings, []);
+	}
+	for (const refreshMinutes of [35792, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER + 1, 1e100, Infinity, -Infinity, NaN, 1.5, 0, -1, "5", null]) {
+		const loaded = normalizeSettings({ refreshMinutes });
+		assert.equal(loaded.settings.refreshMinutes, 5, String(refreshMinutes));
+		assert.deepEqual(loaded.warnings, ["ignored invalid refreshMinutes"]);
+	}
+	assert.deepEqual(normalizeSettings({}).warnings, []);
+});

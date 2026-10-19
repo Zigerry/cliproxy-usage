@@ -18,6 +18,15 @@ export const DEFAULT_SETTINGS: Settings = {
 	},
 };
 
+// Native timers use a signed 32-bit millisecond delay; larger values run at 1ms.
+const MAX_REFRESH_MINUTES = Math.floor(2_147_483_647 / 60_000);
+
+export function effectiveRefreshMinutes(value: unknown): number {
+	return typeof value === "number" && Number.isSafeInteger(value) &&
+		value >= 1 && value <= MAX_REFRESH_MINUTES
+		? value : DEFAULT_SETTINGS.refreshMinutes;
+}
+
 type JsonObject = Record<string, unknown>;
 
 export type LoadedSettings = {
@@ -59,13 +68,8 @@ export function normalizeSettings(value: unknown): {
 	} else if (value.showWidget !== undefined) {
 		warnings.push("ignored invalid showWidget");
 	}
-	if (
-		typeof value.refreshMinutes === "number" &&
-		Number.isInteger(value.refreshMinutes) &&
-		value.refreshMinutes >= 1
-	) {
-		settings.refreshMinutes = value.refreshMinutes;
-	} else if (value.refreshMinutes !== undefined) {
+	settings.refreshMinutes = effectiveRefreshMinutes(value.refreshMinutes);
+	if (value.refreshMinutes !== undefined && value.refreshMinutes !== settings.refreshMinutes) {
 		warnings.push("ignored invalid refreshMinutes");
 	}
 	if (
