@@ -148,16 +148,34 @@ export async function verifyRegistry(identity: Identity, bytes: Buffer, options:
   }
 }
 
+// gh --paginate --slurp returns one array per successfully fetched page. A
+// complete authenticated list includes drafts; published-by-tag lookup may not.
+export function githubReleaseId(raw: string, identity: Identity): number | undefined {
+  const pages: unknown = JSON.parse(raw);
+  requireThat(Array.isArray(pages) && pages.length > 0, "Invalid release pages");
+  let found: number | undefined;
+  for (const page of pages) {
+    requireThat(Array.isArray(page), "Invalid release page");
+    for (const value of page) {
+      const release = object(value);
+      requireThat(typeof release.tag_name === "string" && release.tag_name.length > 0 &&
+        Number.isSafeInteger(release.id) && Number(release.id) > 0, "Invalid release list entry");
+      if (release.tag_name === identity.tag) {
+        requireThat(found === undefined, "Ambiguous release tag");
+        found = Number(release.id);
+      }
+    }
+  }
+  return found;
+}
 interface GithubState { exists: boolean; draft: boolean; assets: { id: number; name: string }[] }
-export function githubState(raw: string, success: boolean, identity: Identity, allowPublic: boolean, requireAssets: boolean): GithubState {
+export function githubState(raw: string, success: boolean, identity: Identity, allowPublic: boolean, requireAssets: boolean, expectedId?: number): GithubState {
   const match = /^HTTP\/\S+ (\d{3})[^\r\n]*\r?\n[\s\S]*?\r?\n\r?\n([\s\S]+)$/.exec(raw);
   requireThat(match, "Missing GitHub API HTTP response");
   const status = Number(match[1]), body = object(JSON.parse(match[2]));
-  if (!success && status === 404 && body.message === "Not Found") {
-    requireThat(!requireAssets, "Expected existing release assets");
-    return { exists: false, draft: false, assets: [] };
-  }
+  // This is a read of an already discovered ID, never an absence probe.
   requireThat(success && status === 200, `GitHub API HTTP ${status}`);
+  requireThat(expectedId === undefined || body.id === expectedId, "GitHub release ID mismatch");
   requireThat(body.tag_name === identity.tag && body.target_commitish === identity.commit && body.prerelease === false, "GitHub release tag/commit/type mismatch");
   requireThat(typeof body.draft === "boolean" && (body.draft || allowPublic), "Public release without verified npm version");
   requireThat(Number.isSafeInteger(body.id) && Number(body.id) > 0 && Array.isArray(body.assets), "Invalid release metadata");
@@ -171,6 +189,22 @@ export function githubState(raw: string, success: boolean, identity: Identity, a
   }
   requireThat(!(requireAssets || !body.draft) || assets.length === 2, "Incomplete release assets");
   return { exists: true, draft: body.draft, assets };
+}
+
+function githubApi(args: string[], operation: string): string {
+  const result = spawnSync("gh", ["api", ...args], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+  requireThat(result.status === 0, `GitHub release ${operation} failed`);
+  return result.stdout;
+}
+// Read-only shared probe, also usable for non-mutating live-contract verification.
+export function readGithubState(identity: Identity, allowPublic: boolean, requireAssets: boolean): GithubState {
+  const id = githubReleaseId(githubApi(["--paginate", "--slurp", `repos/${REPOSITORY}/releases?per_page=100`], "list"), identity);
+  if (id === undefined) {
+    requireThat(!requireAssets, "Expected existing release assets");
+    return { exists: false, draft: false, assets: [] };
+  }
+  const raw = githubApi(["--include", `repos/${REPOSITORY}/releases/${id}`], "lookup");
+  return githubState(raw, true, identity, allowPublic, requireAssets, id);
 }
 
 const env = (key: string) => process.env[key] ?? "";
@@ -278,9 +312,8 @@ async function main(): Promise<void> {
     }
     output("latest", latest === identity.version); return;
   }
-  if (command === "gh-state") {
-    const state = githubState(readFileSync(env("GH_RESPONSE"), "utf8"), env("GH_SUCCESS") === "true", identity,
-      env("ALLOW_PUBLIC") === "true", env("REQUIRE_ASSETS") === "true");
+  if (command === "gh-probe") {
+    const state = readGithubState(identity, env("ALLOW_PUBLIC") === "true", env("REQUIRE_ASSETS") === "true");
     writeFileSync(env("STATE_FILE"), JSON.stringify(state)); return;
   }
   throw new Error("Unknown release command");

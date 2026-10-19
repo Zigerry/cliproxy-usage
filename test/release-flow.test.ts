@@ -154,10 +154,27 @@ if (tool === 'git') {
   }
 } else if (tool === 'gh') {
   assert.equal(process.env.GH_TOKEN, 'fixture-only-not-a-credential');
-  if (args[0] === 'api' && args[1] === '--include') {
-    equal(['api', '--include', 'repos/' + repo + '/releases/tags/' + tag]); log('gh.probe', args);
-    const status = state.release ? 200 : 404;
-    console.log('HTTP/2.0 ' + status + ' Test\r\nContent-Type: application/json\r\n\r\n' + JSON.stringify(state.release ? { ...state.release, assets: state.release.assets.map(({ bytes, ...asset }) => asset) } : { message: 'Not Found' }));
+  if (args[0] === '--version') {
+    equal(['--version']); log('gh.version'); console.log('gh version 2.102.0 (fixture)');
+  } else if (args[0] === 'api' && args[1] === '--paginate') {
+    equal(['api', '--paginate', '--slurp', 'repos/' + repo + '/releases?per_page=100']); log('gh.list', args);
+    if (state.listFailure) {
+      if (state.partialListFailure) console.log(JSON.stringify([[{ id: 10, tag_name: 'v0.1.0' }]]));
+      console.error('Fixture list HTTP ' + state.listFailure); process.exitCode = 1;
+    }
+    else {
+      const rows = state.release ? [{ ...state.release, assets: state.release.assets.map(({ bytes, ...asset }) => asset) }] : [];
+      const pages = state.laterPage ? [Array.from({ length: 100 }, (_, i) => ({ id: 1000 + i, tag_name: 'v0.0.' + i })), rows] : [rows];
+      if (state.duplicateDiscovery && state.release) pages.push(rows);
+      console.log(JSON.stringify(pages));
+    }
+  } else if (args[0] === 'api' && args[1] === '--include') {
+    const byTag = args[2] === 'repos/' + repo + '/releases/tags/' + tag;
+    if (byTag) { equal(['api', '--include', 'repos/' + repo + '/releases/tags/' + tag]); log('gh.tagProbe', args); }
+    else { equal(['api', '--include', 'repos/' + repo + '/releases/1']); log('gh.probe', args); }
+    // Drafts are present in authenticated list/ID lookup, not this tag route.
+    const status = state.release && (byTag ? !state.release.draft : !state.missingById) ? 200 : 404;
+    console.log('HTTP/2.0 ' + status + ' Test\r\nContent-Type: application/json\r\n\r\n' + JSON.stringify(status === 200 ? { ...state.release, assets: state.release.assets.map(({ bytes, ...asset }) => asset) } : { message: 'Not Found' }));
     if (status === 404) process.exitCode = 1;
   } else if (args[0] === 'api') {
     assert.equal(args.length, 4); assert.equal(args[2], '-H'); assert.equal(args[3], 'Accept: application/octet-stream');
@@ -194,6 +211,7 @@ interface State {
   npmVersion: string; metadata: Metadata | null; registryBytes: string; latest: string; githubLatest: string;
   expectedMetadata: Metadata; expectedBytes: string; release: Release | null;
   createFailure?: boolean; publishFailure?: boolean; dirty?: boolean; offMain?: boolean;
+  listFailure?: number; partialListFailure?: boolean; laterPage?: boolean; duplicateDiscovery?: boolean; missingById?: boolean;
 }
 interface Event { n: number; prev: string; kind: string; args: string[]; hash: string }
 function journal(file: string): Event[] {
@@ -377,6 +395,49 @@ test("actual release shell is fail-closed and recoverable against isolated GH/np
       const result = f.run();
       assert.equal(result.failed, plan.name); assert.match(result.stderr, /Registry (SHA512 mismatch|tarball bytes differ|gitHead mismatch)/);
       noPublication(f); noAssetWrites(f); assert.equal(count(f, "gh.probe"), 0); assert.equal(f.state().release, null);
+    });
+    await t.test("real-contract control: tag404 hides a draft but list/ID recovery reuses it", () => {
+      const f = fixture({ ...existing, release: release() });
+      const tagLookup = spawnSync(join(bin, "gh"), ["api", "--include", "repos/Zigerry/cliproxy-usage/releases/tags/v1.2.3"], {
+        env: { ...f.env, GH_TOKEN: "fixture-only-not-a-credential" }, encoding: "utf8",
+      });
+      assert.equal(tagLookup.status, 1); assert.match(tagLookup.stdout, /404/);
+      assert.equal(f.state().release?.draft, true);
+      const result = f.run(); assert.equal(result.failed, undefined, result.stderr);
+      assert.equal(count(f, "gh.tagProbe"), 1, "Workflow itself must not use published-by-tag discovery");
+      assert.equal(count(f, "gh.create"), 0); noAssetWrites(f); assert.equal(count(f, "npm.publish"), 0);
+      assert.equal(f.state().release?.draft, false);
+    });
+    await t.test("complete list discovery finds an existing draft after the first 100 releases", () => {
+      const f = fixture({ ...existing, release: release(), laterPage: true }), result = f.run();
+      assert.equal(result.failed, undefined, result.stderr); assert.equal(count(f, "gh.create"), 0);
+      noAssetWrites(f); assert.equal(count(f, "npm.publish"), 0); assert.equal(count(f, "gh.tagProbe"), 0);
+    });
+    await t.test("duplicate list matches stop before ID lookup or any release write", () => {
+      const f = fixture({ release: release(), duplicateDiscovery: true }), result = f.run();
+      assert.equal(result.failed, stage.name); assert.match(result.stderr, /Ambiguous release tag/);
+      noPublication(f); noAssetWrites(f); assert.equal(count(f, "gh.create"), 0); assert.equal(count(f, "gh.probe"), 0);
+    });
+    for (const status of [401, 403, 429, 500, 503]) await t.test(`release list HTTP${status} cannot become absence`, () => {
+      const f = fixture({ listFailure: status }), result = f.run();
+      assert.equal(result.failed, stage.name); assert.match(result.stderr, /GitHub release list failed/);
+      noPublication(f); noAssetWrites(f); assert.equal(count(f, "gh.create"), 0);
+    });
+    await t.test("partial list output followed by a later-page failure cannot become absence", () => {
+      const f = fixture({ listFailure: 503, partialListFailure: true }), result = f.run();
+      assert.equal(result.failed, stage.name); assert.match(result.stderr, /GitHub release list failed/);
+      noPublication(f); noAssetWrites(f); assert.equal(count(f, "gh.create"), 0);
+    });
+    await t.test("release disappearance between discovery and ID read cannot create a replacement", () => {
+      const f = fixture({ release: release(), missingById: true }), result = f.run();
+      assert.equal(result.failed, stage.name); assert.match(result.stderr, /GitHub release lookup failed/);
+      noPublication(f); noAssetWrites(f); assert.equal(count(f, "gh.create"), 0); assert.equal(count(f, "gh.probe"), 1);
+    });
+    await t.test("documented starter asset stops safely rather than overwriting or publishing", () => {
+      const starter = { ...fullAssets()[0], state: "starter", bytes: "" };
+      const f = fixture({ release: release(true, [starter]) }), result = f.run();
+      assert.equal(result.failed, stage.name); assert.match(result.stderr, /Invalid release asset ID\/state/);
+      noPublication(f); noAssetWrites(f); assert.equal(count(f, "gh.create"), 0);
     });
     await t.test("matching existing npm and GH assets skip npm and never overwrite assets", () => {
       const initialRelease = release();

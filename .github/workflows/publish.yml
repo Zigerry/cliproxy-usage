@@ -76,7 +76,6 @@ jobs:
       - name: Configure runner-local artifact paths
         run: |
           printf 'RELEASE_DIR=%s/release-artifact\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
-          printf 'GH_RESPONSE=%s/release-response.txt\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
           printf 'STATE_FILE=%s/release-state.json\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Validate exact tagged provenance and original manifests
         run: node scripts/release.ts gate
@@ -97,14 +96,9 @@ jobs:
           ALLOW_PUBLIC: ${{ steps.plan.outputs.publish == 'false' }}
         run: |
           set -euo pipefail
+          gh --version
           probe() {
-            if gh api --include "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" > "$GH_RESPONSE"; then
-              export GH_SUCCESS=true
-            else
-              export GH_SUCCESS=false
-            fi
-            # Only an actual API404 Not Found is absence; all other errors stop.
-            node scripts/release.ts gh-state
+            node scripts/release.ts gh-probe
           }
           probe
           if [ "$(jq -r .exists "$STATE_FILE")" = false ]; then
@@ -163,12 +157,7 @@ jobs:
           MAKE_LATEST: ${{ steps.verify.outputs.latest }}
         run: |
           set -euo pipefail
-          if gh api --include "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" > "$GH_RESPONSE"; then
-            export GH_SUCCESS=true
-          else
-            export GH_SUCCESS=false
-          fi
-          node scripts/release.ts gh-state
+          node scripts/release.ts gh-probe
           for file in "$ARTIFACT" "$RECORD"; do
             name="$(basename "$file")"
             id="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .id' "$STATE_FILE")"
