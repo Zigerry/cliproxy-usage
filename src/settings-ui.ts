@@ -77,7 +77,7 @@ export async function promptManagementKey(
 }
 
 export function settingsSummary(settings: Settings, settingsPath: string): string {
-	return `Management URL: ${settings.managementUrl || "automatic"}\nManagement key: ${settings.managementKey ? "configured" : "run /cliproxy-usage setup"}\n${settingsPath}`;
+	return `Management URL: ${settings.managementUrl || "automatic"}\nManagement key: ${settings.managementKey ? "configured" : "run /cliproxy-usage setup"}\nWidget visibility: ${settings.showWidget ? "enabled" : "disabled"}\n${settingsPath}`;
 }
 
 function errorMessage(error: unknown): string {
@@ -85,6 +85,7 @@ function errorMessage(error: unknown): string {
 }
 
 function settingValue(settings: Settings, id: string): string {
+	if (id === "showWidget") return settings.showWidget ? "enabled" : "disabled";
 	if (id === "managementUrl") return settings.managementUrl || "automatic";
 	if (id === "refreshMinutes") return String(settings.refreshMinutes);
 	if (id === "maxVisibleAccounts") {
@@ -122,6 +123,13 @@ export async function showSettings(
 	await ctx.ui.custom((tui, theme, _keybindings, done) => {
 		const items: SettingItem[] = [
 			{
+				id: "showWidget",
+				label: "Widget visibility",
+				description: "Only visibility; background refresh and usage details remain available",
+				currentValue: settings.showWidget ? "enabled" : "disabled",
+				values: ["enabled", "disabled"],
+			},
+			{
 				id: "managementUrl",
 				label: "Management URL override",
 				description: "Empty uses the base URL from cliproxyapi.json",
@@ -144,7 +152,7 @@ export async function showSettings(
 			{
 				id: "maxVisibleAccounts",
 				label: "Visible accounts",
-				description: "Maximum account rows shown below editor",
+				description: "Maximum accounts shown below editor; rows may wrap",
 				currentValue: String(settings.maxVisibleAccounts),
 				values: ["1", "2", "3", "4", "5", "10"],
 			},
@@ -183,6 +191,7 @@ export async function showSettings(
 			getSettingsListTheme(),
 			(id, value) => {
 				const changeRevision = ++revision;
+				if (id === "showWidget") settings.showWidget = value === "enabled";
 				if (id === "managementUrl") {
 					settings.managementUrl = value === "automatic" ? "" : value;
 				}

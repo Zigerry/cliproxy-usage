@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -118,6 +118,78 @@ test("loadSettings migrates legacy bytes to canonical path", async () => {
 		assert.equal(loaded.settings.refreshMinutes, 30);
 		assert.equal(await readFile(canonical, "utf8"), bytes);
 		await assert.rejects(readFile(legacy, "utf8"));
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("showWidget defaults true for missing files and legacy objects", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-cliproxy-widget-"));
+	try {
+		const path = join(dir, "settings.json");
+		const legacy = join(dir, "old.json");
+		assert.equal((await loadSettings(path, legacy)).settings.showWidget, true);
+		await writeFile(path, JSON.stringify({ refreshMinutes: 10 }));
+		const loaded = await loadSettings(path, legacy);
+		assert.equal(loaded.settings.showWidget, true);
+		assert.deepEqual(loaded.warnings, []);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("showWidget accepts only literal booleans when loading files", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-cliproxy-widget-"));
+	try {
+		const path = join(dir, "settings.json");
+		for (const value of [true, false, "true", "false", 0, 1, null, [], {}]) {
+			await writeFile(path, JSON.stringify({ showWidget: value }));
+			const loaded = await loadSettings(path, join(dir, "old.json"));
+			assert.equal(loaded.settings.showWidget, typeof value === "boolean" ? value : true);
+			assert.deepEqual(loaded.warnings, typeof value === "boolean" ? [] : ["ignored invalid showWidget"]);
+			assert.equal(loaded.writable, true);
+		}
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("showWidget false migrates from legacy bytes and saves with unknown fields and private permissions", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-cliproxy-widget-"));
+	try {
+		const path = join(dir, "settings.json");
+		const legacy = join(dir, "old.json");
+		const bytes = JSON.stringify({ showWidget: false, future: { nested: [1, 2] }, providers: { future: "keep", codex: false } });
+		await writeFile(legacy, bytes);
+		const loaded = await loadSettings(path, legacy);
+		assert.equal(loaded.settings.showWidget, false);
+		assert.equal(await readFile(path, "utf8"), bytes);
+		assert.equal((await stat(path)).mode & 0o777, 0o600);
+		await assert.rejects(readFile(legacy), { code: "ENOENT" });
+		for (const showWidget of [true, false]) {
+			const raw = await saveSettings({ ...loaded.settings, showWidget }, loaded.raw, path);
+			const reloaded = await loadSettings(path, legacy);
+			assert.equal(reloaded.settings.showWidget, showWidget);
+			assert.deepEqual(reloaded.raw, raw);
+			assert.deepEqual(raw.future, { nested: [1, 2] });
+			assert.deepEqual((raw.providers as Record<string, unknown>).future, "keep");
+			assert.equal(reloaded.settings.providers.codex, false);
+			assert.equal((await stat(path)).mode & 0o777, 0o600);
+			assert.deepEqual(await readdir(dir), ["settings.json"]);
+		}
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("showWidget save failure preserves the target and cleans its atomic temporary file", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-cliproxy-widget-"));
+	try {
+		const path = join(dir, "settings.json");
+		await mkdir(path);
+		await assert.rejects(saveSettings({ ...DEFAULT_SETTINGS, showWidget: false }, {}, path));
+		assert.equal((await stat(path)).isDirectory(), true);
+		assert.deepEqual(await readdir(dir), ["settings.json"]);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}

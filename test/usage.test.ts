@@ -15,6 +15,7 @@ import type { AccountUsage, Settings } from "../src/types.js";
 const config = (): Settings => ({
 	managementUrl: "",
 	managementKey: "",
+	showWidget: true,
 	refreshMinutes: 5,
 	maxVisibleAccounts: 4,
 	providers: {
