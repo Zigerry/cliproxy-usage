@@ -364,7 +364,7 @@ test("formatDetails handles empty, success, errors, and missing data", () => {
 	);
 });
 
-test("renderUsage retains Claude orange and the 8/6/4 adaptive meter widths", () => {
+test("renderUsage uses host-themed Claude labels and the 8/6/4 adaptive meter widths", () => {
 	const { ctx, render } = createContext();
 	renderUsage(ctx, ["alpha", "beta", "gamma"].map((label) => ({
 		provider: "claude" as const, label, windows: [{ label: "7d", used: 50 }],
@@ -372,7 +372,8 @@ test("renderUsage retains Claude orange and the 8/6/4 adaptive meter widths", ()
 	for (const [width, bar] of [[91, "━━━━────"], [85, "━━━───"], [79, "━━──"]] as const) {
 		const lines = render(width);
 		assert.equal(lines.length, 2);
-		assert.match(lines[0] ?? "", /\u001b\[38;5;208mClaude/);
+		assert.match(lines[0] ?? "", /Claude/);
+		assert.doesNotMatch(lines.join("\n"), /\u001b\[38;5;208m/);
 		assert.equal(lines[1]?.split(bar).length, 4, `${width} columns uses ${bar.length} cells`);
 	}
 });

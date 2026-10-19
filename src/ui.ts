@@ -9,15 +9,12 @@ import type {
 	AccountUsage,
 	AccountUsageSnapshot,
 	BalanceAmount,
-	ProviderName,
 	ReadonlyAccountBalance,
 	Theme,
 	UiContext,
 	UsageWindow,
 	UsageSnapshot,
 } from "./types.js";
-
-const CLAUDE_ORANGE = "\u001b[38;5;208m";
 
 /** Remaining quota in percent, clamped to 0-100. */
 export function remainingPercent(window: Readonly<UsageWindow>): number {
@@ -362,10 +359,7 @@ export function renderUsage(
 					providers.size === 1 && visibleItems.length > 1
 						? visibleItems[0]?.provider
 						: undefined;
-				const styledProvider = (provider: ProviderName, text: string) =>
-					provider === "claude"
-						? `${CLAUDE_ORANGE}${text}\u001b[0m`
-						: theme.fg("text", text);
+				const styledProvider = (text: string) => theme.fg("text", text);
 				const labelLimit = visibleItems.length > 1 ? 18 : 24;
 				const plainTheme: Theme = { fg: (_color, text) => text };
 				const buildCards = (barWidth: number, styled: boolean): string[][] =>
@@ -376,7 +370,7 @@ export function renderUsage(
 						const label = item.label || (visibleItems.length > 1 ? "remote" : "");
 						const numbered = items.some((other) => other !== item && other.label === item.label);
 						const provider = groupedProvider ? "" : styled
-							? styledProvider(item.provider, PROVIDER_LABELS[item.provider]) : PROVIDER_LABELS[item.provider];
+							? styledProvider(PROVIDER_LABELS[item.provider]) : PROVIDER_LABELS[item.provider];
 						const identity = (budget: number) => layoutAccountIdentity(provider, label, ordinal, budget, paintTheme, labelLimit, " │ ", numbered);
 						const data = (budget: number, size = barWidth): string[] => item.result === "unknown"
 							? [paint("dim", budget >= 7 ? "unknown" : omitted("unknown", budget))]
@@ -429,7 +423,7 @@ export function renderUsage(
 					const kind = groupedProvider === "deepseek" ? "balance" : "quota";
 					lines.push(
 						truncateToWidth(
-							`${styledProvider(groupedProvider, PROVIDER_LABELS[groupedProvider])} ${theme.fg(
+							`${styledProvider(PROVIDER_LABELS[groupedProvider])} ${theme.fg(
 								"dim",
 								`${kind} · ${count} account${count === 1 ? "" : "s"}`,
 							)}`,
