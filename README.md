@@ -51,6 +51,8 @@ Quota bars represent **remaining** capacity:
 | Grok | `grok-*`, `xai-*` | Weekly billing window |
 | Kimi Code | `kimi-*`, `moonshot-*` | 7d subscription and 5h rate-limit windows |
 
+Quota window labels use explicit provider metadata, never the distance to reset. An unknown duration uses a neutral limit label; a missing quota number stays unknown rather than showing 100% remaining. Valid reset timestamps are still shown as countdowns.
+
 Unsupported model families hide the widget and do not open a usage view.
 
 ## Requirements
