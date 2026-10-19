@@ -115,7 +115,7 @@ pi update --extension https://github.com/Zigerry/cliproxy-usage.git
 
 Details controls:
 
-- `r`: force refresh through the existing refresh queue
+- `r`: force refresh through the existing queue; bypass local backoff, but not a server's `Retry-After` wait
 - `↑` / `↓`, Page Up / Page Down: scroll
 - Enter / Esc: close and return to Pi
 
@@ -128,6 +128,16 @@ Widget, details, and status use the same account-level snapshot. Failed reads ca
 Data becomes stale when it reaches the configured refresh age, a reported reset is due, or a refresh failure applies. Local expiry only redraws the display: it neither queries the provider nor replenishes quota. Bar colors still represent remaining quota, not freshness.
 
 Details keep status/errors visible while scrolling and show data age and last actual query-attempt round. `Last refresh` in status means the last **complete** success; partial success only advances the successful accounts' data times. Old details close on provider/source/login/session invalidation rather than freezing on old accounts. Usage data and timestamps remain session-only.
+
+## Refresh limits and backoff
+
+All refresh triggers share one eligibility check. Temporary network/timeout/429/5xx failures delay automatic retries: the delay starts at `refreshMinutes`, doubles once per failed round, and caps at the larger of the configured interval or 60 minutes. Partial success does not erase a same-round failure; a clean completed round clears the corresponding local backoff, even if quota data remains unknown.
+
+Valid `Retry-After` seconds or HTTP dates on failed responses impose a separate server wait, without the local cap. Management waits cover every provider on that source; a provider account's wait conservatively covers that provider. Management 429 without a valid future deadline uses source-level **local** backoff. Once a Management 429, authentication rejection or server wait is known, unstarted work in that round is skipped, not counted as another failure. Already-started concurrent requests may finish.
+
+`r` can bypass local backoff, never an explicit server wait. Details/status distinguish **earliest automatic request**, **earliest manual request**, and **next automatic check**. A check can occur before eligibility and do no HTTP; no timestamp promises a request. With no active automatic schedule/configuration/model, no automatic check is advertised. No extra retry scheduler is started.
+
+These facts are session-only. Changing source/credentials or resetting the session clears them. Switching models or disabling/re-enabling a provider cannot remove an unexpired server wait. Management authentication rejection pauses automatic requests; a provider's 401 does not mean the Management key was rejected.
 
 ## Configuration
 

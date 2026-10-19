@@ -130,6 +130,8 @@ export function snapshotStatusText(snapshot: UsageSnapshot): string {
 	if (primary) parts.push(primary);
 	if (snapshot.stale) parts.push("stale");
 	if (snapshot.partial) parts.push("partial");
+	if ((snapshot.eligibility?.manualAllowedAt ?? 0) > snapshot.generatedAt) parts.push("server wait");
+	else if ((snapshot.eligibility?.automaticAllowedAt ?? 0) > snapshot.generatedAt) parts.push("backoff");
 	if (snapshot.accounts.some((item) => item.cached)) parts.push("cached");
 	if (snapshot.error || snapshot.accounts.some((item) => item.result === "error" || item.error)) {
 		parts.push("error");
@@ -183,6 +185,21 @@ export function configurationStatusText(configuration: UsageSnapshot["configurat
 	}
 }
 
+/** Eligibility is a constraint, never a promise to issue HTTP at that time. */
+export function formatRefreshEligibility(snapshot: UsageSnapshot): string[] {
+	const policy = snapshot.eligibility;
+	if (!policy) return [];
+	const configured = snapshot.configuration.status === "ready";
+	const revalidate = snapshot.configuration.status === "setup-required" && snapshot.configuration.reason === "rejected";
+	const automatic = timestamp(policy.automaticAllowedAt);
+	const manual = timestamp(policy.manualAllowedAt);
+	return [
+		`Earliest automatic request: ${configured ? automatic ?? "now" : "unavailable (configuration)"} (eligibility only)`,
+		`Earliest manual request: ${manual ?? (configured || revalidate ? "now" : "unavailable (configuration)")}${manual ? " (server wait)" : revalidate ? " (force can revalidate Management access)" : configured && automatic ? " (force bypasses local backoff)" : ""}`,
+		`Next automatic check: ${timestamp(policy.nextAutomaticCheckAt) ?? "none"} (not a request promise)`,
+	];
+}
+
 /** Full metadata and data from the same snapshot used by both live views. */
 export function formatSnapshotDetails(snapshot: UsageSnapshot): string {
 	const lines = [
@@ -190,6 +207,7 @@ export function formatSnapshotDetails(snapshot: UsageSnapshot): string {
 		...(snapshotStatusText(snapshot) ? [`Status: ${snapshotStatusText(snapshot)}`] : []),
 		`Last refresh: ${timestamp(snapshot.lastCompleteSuccessAt) ?? "never"} (complete success)`,
 		`Last attempt: ${timestamp(snapshot.lastAttemptAt) ?? "never"}`,
+		...formatRefreshEligibility(snapshot),
 	];
 	const configuration = configurationStatusText(snapshot.configuration);
 	if (configuration) lines.push(configuration);

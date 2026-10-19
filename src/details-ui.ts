@@ -12,6 +12,7 @@ import {
 	formatAccountSnapshotMetadata,
 	formatBalance,
 	formatResetTime,
+	formatRefreshEligibility,
 	remainingColor,
 	remainingPercent,
 	snapshotStatusText,
@@ -110,7 +111,8 @@ export class UsageDetailsComponent implements Component {
 		const message = configurationStatusText(snapshot.configuration);
 		if (error || message) pinned.push(this.theme.fg("error", [error, message].filter(Boolean).join(" · ")));
 
-		const body: string[] = [];
+		const body: string[] = formatRefreshEligibility(snapshot).map((line) => this.theme.fg("dim", line));
+		if (body.length) body.push("");
 		for (const item of snapshot.accounts) {
 			const provider = this.theme.fg("accent", PROVIDER_LABELS[item.provider]);
 			const label = item.label || "remote";
