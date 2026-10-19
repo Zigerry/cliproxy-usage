@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing version tag to publish
+        description: Existing canonical vX.Y.Z tag (dispatch at this same tag ref)
         required: true
         type: string
   push:
@@ -12,36 +12,170 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
+# One production lane across versions and the bump entry point. Never cancel a publisher.
 concurrency:
-  group: publish-${{ inputs.tag || github.ref_name }}
+  group: production-release
   cancel-in-progress: false
 
 jobs:
-  publish:
+  test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk: ["0.80.10", "1.3.0"]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - run: npm install --global npm@12.2.0
+      - run: test "$(npm --version)" = 12.2.0
+      - run: npm ci
+      - name: Verify isolated SDK compatibility
+        env:
+          SDK_VERSION: ${{ matrix.sdk }}
+        run: |
+          set -euo pipefail
+          if [ "$SDK_VERSION" = 1.3.0 ]; then
+            npm install --no-save --package-lock=false \
+              "@earendil-works/pi-agent-core@$SDK_VERSION" \
+              "@earendil-works/pi-ai@$SDK_VERSION" \
+              "@earendil-works/pi-coding-agent@$SDK_VERSION" \
+              "@earendil-works/pi-tui@$SDK_VERSION"
+          fi
+          npm run check
+          npm test
+          git diff --exit-code -- package.json package-lock.json
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      INPUT_TAG: ${{ inputs.tag }}
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+      - run: npm install --global npm@12.2.0
+      - name: Configure runner-local artifact paths
+        run: |
+          printf 'RELEASE_DIR=%s/release-artifact\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'GH_RESPONSE=%s/release-response.txt\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'STATE_FILE=%s/release-state.json\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Validate exact tagged provenance and original manifests
+        run: node scripts/release.ts gate
+      # This fresh job never installs the matrix SDK into the release tree.
       - run: npm ci
-      - run: npm run check
-      - run: npm test
-      - name: Publish package
+      - name: Pack once and inspect real tar bytes
+        id: pack
+        run: node scripts/release.ts pack
+      - name: Verify npm state and reject downgrades
+        id: plan
+        run: node scripts/release.ts plan
+      - name: Stage recoverable draft and verify same-artifact assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT: ${{ steps.pack.outputs.artifact }}
+          RECORD: ${{ steps.pack.outputs.record }}
+          COMMIT: ${{ steps.pack.outputs.commit }}
+          ALLOW_PUBLIC: ${{ steps.plan.outputs.publish == 'false' }}
+        run: |
+          set -euo pipefail
+          probe() {
+            if gh api --include "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" > "$GH_RESPONSE"; then
+              export GH_SUCCESS=true
+            else
+              export GH_SUCCESS=false
+            fi
+            # Only an actual API404 Not Found is absence; all other errors stop.
+            node scripts/release.ts gh-state
+          }
+          probe
+          if [ "$(jq -r .exists "$STATE_FILE")" = false ]; then
+            gh release create "$RELEASE_TAG" --repo "$REPOSITORY" \
+              --target "$COMMIT" --verify-tag --draft --latest=false \
+              --title "$RELEASE_TAG" --generate-notes \
+              --notes "Exact tarball and commit record attached; npm/asset identity is verified before public release."
+            probe
+          fi
+          for file in "$ARTIFACT" "$RECORD"; do
+            name="$(basename "$file")"
+            id="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .id' "$STATE_FILE")"
+            if [ -n "$id" ]; then
+              gh api "repos/$REPOSITORY/releases/assets/$id" -H 'Accept: application/octet-stream' > "$RUNNER_TEMP/download-$name"
+              cmp "$file" "$RUNNER_TEMP/download-$name"
+            fi
+          done
+          # Check all existing assets before adding any missing asset.
+          for file in "$ARTIFACT" "$RECORD"; do
+            name="$(basename "$file")"
+            id="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .id' "$STATE_FILE")"
+            if [ -z "$id" ]; then
+              # No overwrite option: a concurrent or mismatched asset must fail.
+              gh release upload "$RELEASE_TAG" "$file" --repo "$REPOSITORY"
+            fi
+          done
+          export REQUIRE_ASSETS=true
+          probe
+          for file in "$ARTIFACT" "$RECORD"; do
+            name="$(basename "$file")"
+            id="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .id' "$STATE_FILE")"
+            gh api "repos/$REPOSITORY/releases/assets/$id" -H 'Accept: application/octet-stream' > "$RUNNER_TEMP/download-$name"
+            cmp "$file" "$RUNNER_TEMP/download-$name"
+          done
+      - name: Publish exact verified tgz
+        if: steps.plan.outputs.publish == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_PROVENANCE: "true"
+          ARTIFACT: ${{ steps.pack.outputs.artifact }}
         run: |
-          package="$(npm pkg get name | tr -d '\"')"
-          version="$(npm pkg get version | tr -d '\"')"
-          if npm view "${package}@${version}" version >/dev/null 2>&1; then
-            echo "Version already published; skipping."
+          set -euo pipefail
+          node scripts/release.ts publish-gate
+          npm publish "$ARTIFACT" --ignore-scripts --access public --provenance --registry=https://registry.npmjs.org --tag=latest
+      - name: Verify registry bytes and latest after publication or rerun
+        id: verify
+        env:
+          EXPECT_PUBLISH: ${{ steps.plan.outputs.publish }}
+        run: node scripts/release.ts verify
+      - name: Finalize verified release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT: ${{ steps.pack.outputs.artifact }}
+          RECORD: ${{ steps.pack.outputs.record }}
+          REQUIRE_ASSETS: "true"
+          ALLOW_PUBLIC: "true"
+          MAKE_LATEST: ${{ steps.verify.outputs.latest }}
+        run: |
+          set -euo pipefail
+          if gh api --include "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" > "$GH_RESPONSE"; then
+            export GH_SUCCESS=true
           else
-            npm publish --access public
+            export GH_SUCCESS=false
+          fi
+          node scripts/release.ts gh-state
+          for file in "$ARTIFACT" "$RECORD"; do
+            name="$(basename "$file")"
+            id="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .id' "$STATE_FILE")"
+            gh api "repos/$REPOSITORY/releases/assets/$id" -H 'Accept: application/octet-stream' > "$RUNNER_TEMP/download-$name"
+            cmp "$file" "$RUNNER_TEMP/download-$name"
+          done
+          if [ "$(jq -r .draft "$STATE_FILE")" = true ] || [ "$MAKE_LATEST" = true ]; then
+            gh release edit "$RELEASE_TAG" --repo "$REPOSITORY" \
+              --draft=false --latest="$MAKE_LATEST"
           fi
