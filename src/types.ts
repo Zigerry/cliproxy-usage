@@ -35,10 +35,21 @@ export type AccountBalance = {
 
 export type AccountUsage = {
 	provider: ProviderName;
+	/** Opaque Management auth_index; never a display label or credential. */
+	accountId?: string;
 	label: string;
 	windows: UsageWindow[];
 	balance?: AccountBalance;
 	error?: string;
+};
+
+export type ProviderReadResult =
+	| { provider: ProviderName; discovery: "success"; items: AccountUsage[] }
+	| { provider: ProviderName; discovery: "failure"; error: string };
+
+export type ReadAccountsResult = {
+	providers: ProviderReadResult[];
+	managementAuthFailed: boolean;
 };
 
 export type Theme = {

@@ -161,13 +161,14 @@ test("readAccounts queries provider quota through the remote Management API", as
 				providerConfigPath,
 				providers: ["codex"],
 			}),
-			[
-				{
+			{ managementAuthFailed: false, providers: [{
+				provider: "codex", discovery: "success", items: [{
 					provider: "codex",
+					accountId: "codex-1",
 					label: "user@example.com",
 					windows: [{ label: "7d", used: 25, resetsAt: undefined }],
-				},
-			],
+				}],
+			}] },
 		);
 		assert.equal(requests.length, 2);
 		assert.equal(requests[0]?.authorization, "Bearer management-secret");
@@ -247,24 +248,24 @@ test("readAccounts discovers official DeepSeek entries through openai-compatibil
 			);
 		};
 
-		assert.deepEqual(await readAccounts(value), [
-			{
+		assert.deepEqual(await readAccounts(value), { managementAuthFailed: false, providers: [{
+			provider: "deepseek", discovery: "success", items: [{
 				provider: "deepseek",
+				accountId: "deepseek-1",
 				label: "official-balance",
 				windows: [],
 				balance: {
 					available: true,
 					amounts: [{ currency: "CNY", amount: 42.5 }],
 				},
-			},
-		]);
-		assert.equal(requests.length, 3);
-		assert.equal(requests[0]?.url, "http://192.168.1.10:9274/v0/management/auth-files");
+			}],
+		}] });
+		assert.equal(requests.length, 2);
 		assert.equal(
-			requests[1]?.url,
+			requests[0]?.url,
 			"http://192.168.1.10:9274/v0/management/openai-compatibility",
 		);
-		assert.deepEqual(requests[2]?.body, {
+		assert.deepEqual(requests[1]?.body, {
 			auth_index: "deepseek-1",
 			method: "GET",
 			url: "https://api.deepseek.com/user/balance",
@@ -280,64 +281,54 @@ test("readAccounts discovers official DeepSeek entries through openai-compatibil
 	}
 });
 
-test("readAccounts reports setup instructions when the management key is missing", async () => {
+test("readAccounts reports setup instructions as discovery failures", async () => {
 	const value = config();
 	value.managementUrl = "https://proxy.example.com";
-	const items = await readAccounts(value);
-	assert.deepEqual(accountsForModel(items, "cliproxyapi", "gpt-5"), [
-		{
-			provider: "codex",
-			label: "remote",
-			windows: [],
-			error: "Management key is not configured; run /cliproxy-usage setup",
-		},
-	]);
+	const result = await readAccounts(value);
+	assert.equal(result.managementAuthFailed, false);
+	assert.deepEqual(result.providers.find((item) => item.provider === "codex"), {
+		provider: "codex", discovery: "failure",
+		error: "Management key is not configured; run /cliproxy-usage setup",
+	});
 });
 
 test("readAccounts scopes discovery errors to requested providers", async () => {
 	const value = config();
 	value.managementUrl = "https://proxy.example.com";
-	assert.deepEqual(await readAccounts(value, { providers: ["kimi"] }), [
-		{
-			provider: "kimi",
-			label: "remote",
-			windows: [],
+	assert.deepEqual(await readAccounts(value, { providers: ["kimi"] }), {
+		managementAuthFailed: false, providers: [{
+			provider: "kimi", discovery: "failure",
 			error: "Management key is not configured; run /cliproxy-usage setup",
-		},
-	]);
+		}],
+	});
 });
 
 test("readAccounts reports missing provider and management URLs", async () => {
 	const value = config();
 	value.managementKey = "secret";
-	const items = await readAccounts(value);
-	assert.equal(
-		accountsForModel(items, "cliproxyapi", "gpt-5")[0]?.error,
-		"CLIProxyAPI base URL not found; configure the provider or managementUrl",
-	);
+	const result = await readAccounts(value);
+	assert.deepEqual(result.providers.find((item) => item.provider === "codex"), {
+		provider: "codex", discovery: "failure",
+		error: "CLIProxyAPI base URL not found; configure the provider or managementUrl",
+	});
 });
 
-test("readAccounts signals rejected management credentials", async () => {
-	const originalFetch = globalThis.fetch;
-	let rejected = false;
-	try {
-		const value = config();
-		value.managementUrl = "https://proxy.example.com";
-		value.managementKey = "wrong";
-		globalThis.fetch = async () => new Response("", { status: 401 });
-		const items = await readAccounts(value, {
-			onManagementAuthFailure: () => {
-				rejected = true;
-			},
-		});
-		assert.equal(rejected, true);
-		assert.equal(
-			accountsForModel(items, "cliproxyapi", "gpt-5")[0]?.error,
-			"management authentication failed (HTTP 401); run /cliproxy-usage setup",
-		);
-	} finally {
-		globalThis.fetch = originalFetch;
-	}
+test("readAccounts signals rejected management credentials", async (t) => {
+	const value = config();
+	value.managementUrl = "https://proxy.example.com";
+	value.managementKey = "wrong";
+	let requests = 0;
+	t.mock.method(globalThis, "fetch", async () => {
+		requests++;
+		return new Response("", { status: 401 });
+	});
+	const result = await readAccounts(value);
+	assert.equal(result.managementAuthFailed, true);
+	assert.equal(requests, 1);
+	assert.deepEqual(result.providers.find((item) => item.provider === "codex"), {
+		provider: "codex", discovery: "failure",
+		error: "management authentication failed (HTTP 401); run /cliproxy-usage setup",
+	});
 });
 
 test("readAccounts skips disabled, unsupported, and disabled-provider records", async () => {
@@ -364,7 +355,12 @@ test("readAccounts skips disabled, unsupported, and disabled-provider records", 
 				}),
 				{ status: 200, headers: { "Content-Type": "application/json" } },
 			);
-		assert.deepEqual(await readAccounts(value), []);
+		assert.deepEqual(await readAccounts(value), {
+			managementAuthFailed: false,
+			providers: ["codex", "grok", "kimi"].map((provider) => ({
+				provider, discovery: "success", items: [],
+			})),
+		});
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
