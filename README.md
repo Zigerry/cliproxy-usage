@@ -174,7 +174,7 @@ Settings are stored at `<getAgentDir()>/pi-cliproxy-usage.json`, normally:
 }
 ```
 
-Use `/cliproxy-usage settings` instead of editing the file manually. Legacy extension settings migrate automatically when the canonical file does not exist.
+Use `/cliproxy-usage settings` instead of editing the file manually. Legacy extension settings migrate automatically when the canonical file does not exist. `refreshMinutes` accepts whole minutes from 1 through 35791 (the native timer limit); invalid or larger values use the 5-minute default with a warning.
 
 `managementUrl` is normally empty, which reuses the `baseUrl` from `<getAgentDir()>/cliproxyapi.json` (normally `~/.pi/agent/cliproxyapi.json`). Set an override only when inference and Management API traffic use different addresses. Root URLs, `/v1` URLs, and trailing `/v0/management` paths are normalized automatically.
 
