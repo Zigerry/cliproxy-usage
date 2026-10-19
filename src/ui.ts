@@ -369,7 +369,8 @@ export function renderUsage(
 						const paint = (color: string, text: string) => paintTheme.fg(color, text);
 						const ordinal = items.indexOf(item) + 1;
 						const label = item.label || (visibleItems.length > 1 ? "remote" : "");
-						const numbered = items.some((other) => other !== item && other.label === item.label);
+						const numbered = items.some((other) => other !== item &&
+							(other.label || (visibleItems.length > 1 ? "remote" : "")) === label);
 						const provider = groupedProvider ? "" : styled
 							? styledProvider(PROVIDER_LABELS[item.provider]) : PROVIDER_LABELS[item.provider];
 						const identity = (budget: number) => layoutAccountIdentity(provider, label, ordinal, budget, paintTheme, labelLimit, " │ ", numbered);
