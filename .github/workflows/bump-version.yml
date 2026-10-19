@@ -15,35 +15,56 @@ permissions:
   contents: write
 
 concurrency:
-  group: bump-version-${{ github.ref_name }}
+  group: production-release
   cancel-in-progress: false
 
 jobs:
   bump-version:
     runs-on: ubuntu-latest
     steps:
+      - name: Reject non-main dispatch
+        if: github.ref != 'refs/heads/main'
+        run: exit 1
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.sha }}
           token: ${{ github.token }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
+      - run: npm install --global npm@12.2.0
+      - name: Validate clean up-to-date reviewed main
+        run: |
+          set -euo pipefail
+          git fetch origin refs/heads/main:refs/remotes/origin/main --tags
+          node scripts/release.ts bump-preflight
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - name: Validate pack before creating any version commit or tag
+        env:
+          RELEASE_DIR: ${{ runner.temp }}/bump-pack-check
+        run: node scripts/release.ts bump-pack
       - name: Configure git author
         run: |
           git config user.name "github-actions[bot]"
           git config user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
-      - name: Bump, commit, and tag
+      - name: Bump, validate, atomically push, dispatch Publish at tag
         env:
-          BRANCH: ${{ github.ref_name }}
           GH_TOKEN: ${{ github.token }}
           VERSION_BUMP: ${{ inputs.version_bump }}
         run: |
           set -euo pipefail
-          npm version "$VERSION_BUMP" -m "chore(release): v%s"
-          tag="v$(npm pkg get version | tr -d '\"')"
-          git push origin "HEAD:$BRANCH" --follow-tags
-          gh workflow run Publish --ref "$BRANCH" -f tag="$tag"
-          gh workflow run Release --ref "$BRANCH" -f tag="$tag"
+          case "$VERSION_BUMP" in major|minor|patch) ;; *) exit 1 ;; esac
+          git fetch origin refs/heads/main:refs/remotes/origin/main --tags
+          node scripts/release.ts bump-preflight
+          npm version "$VERSION_BUMP" --ignore-scripts -m "chore(release): v%s"
+          tag="v$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version')"
+          git fetch origin refs/heads/main:refs/remotes/origin/main
+          node scripts/release.ts bump-tag
+          # No force, no protection bypass; concurrent main movement rejects both refs.
+          git push --atomic origin HEAD:refs/heads/main "refs/tags/$tag"
+          # GITHUB_TOKEN tag pushes do not trigger workflows. Dispatch exactly once.
+          gh workflow run Publish --ref "$tag" -f tag="$tag"
