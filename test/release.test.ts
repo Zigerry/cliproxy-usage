@@ -93,6 +93,24 @@ test("registry GET is unauthenticated official-only and only known JSON HTTP404 
   assert.equal(await registryLatest(mock()), "1.2.3");
 });
 
+test("official version-missing JSON string is absence only for exact version and HTTP404", async () => {
+  const missing = `version not found: ${identity.version}`;
+  assert.equal(await registryVersion(identity, async () => json(missing, 404)), null);
+  for (const body of ["version not found: 9.9.9", "Not found", "unavailable", `${missing} `, null, [], { error: "version not found: 9.9.9" }]) {
+    await assert.rejects(registryVersion(identity, async () => json(body, 404)));
+  }
+  for (const status of [200, 302, 401, 403, 429, 500, 503]) {
+    await assert.rejects(registryVersion(identity, async () => json(missing, status)));
+  }
+  await assert.rejects(registryVersion(identity, async () => new Response(JSON.stringify(missing), {
+    status: 404, headers: { "content-type": "text/plain" },
+  })));
+  await assert.rejects(registryVersion(identity, async () => new Response("not json", {
+    status: 404, headers: { "content-type": "application/json" },
+  })));
+  await assert.rejects(registryLatest(async () => json(missing, 404)));
+});
+
 test("existing and newly published npm versions require identity, SHA512, optional gitHead and exact downloaded tgz", async () => {
   await verifyRegistry(identity, bytes, { fetcher: mock() });
   const { gitHead: _, ...withoutGitHead } = metadata;
@@ -108,7 +126,7 @@ test("existing and newly published npm versions require identity, SHA512, option
 test("postpublish replication retries are bounded, only missing is retried, no blind success", async () => {
   let calls = 0; let waits = 0;
   const fetcher: typeof fetch = async (url) => {
-    if (!String(url).endsWith(".tgz") && ++calls < 3) return json({ error: "version not found: 1.2.3" }, 404);
+    if (!String(url).endsWith(".tgz") && ++calls < 3) return json("version not found: 1.2.3", 404);
     return mock()(url);
   };
   await verifyRegistry(identity, bytes, { fetcher, attempts: 3, sleep: async () => { waits++; } });

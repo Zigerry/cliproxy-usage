@@ -94,11 +94,15 @@ async function metadata(url: string, fetcher: Fetcher, missingVersion?: string):
   const response = await registryGet(url, fetcher);
   requireThat(response.status === 200 || response.status === 404, `Registry HTTP ${response.status}`);
   requireThat(response.headers.get("content-type")?.includes("application/json"), "Registry returned non-JSON metadata");
-  const body = object(await response.json());
+  const value: unknown = await response.json();
   if (response.status === 404) {
-    requireThat(missingVersion !== undefined && (body.error === "Not found" || body.error === `version not found: ${missingVersion}`), "Unrecognized registry404");
+    const error = typeof value === "string" ? value : object(value).error;
+    requireThat(missingVersion !== undefined && (
+      error === `version not found: ${missingVersion}` || (typeof value !== "string" && error === "Not found")
+    ), "Unrecognized registry404");
     return null;
   }
+  const body = object(value);
   requireThat(body.name === NAME && typeof body.version === "string", "Invalid registry identity");
   stable(body.version);
   return body;
