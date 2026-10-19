@@ -165,6 +165,7 @@ test("readAccounts queries provider quota through the remote Management API", as
 				provider: "codex", discovery: "success", items: [{
 					provider: "codex",
 					accountId: "codex-1",
+					queried: true,
 					label: "user@example.com",
 					windows: [{ label: "7d", used: 25, resetsAt: undefined }],
 				}],
@@ -252,6 +253,7 @@ test("readAccounts discovers official DeepSeek entries through openai-compatibil
 			provider: "deepseek", discovery: "success", items: [{
 				provider: "deepseek",
 				accountId: "deepseek-1",
+				queried: true,
 				label: "official-balance",
 				windows: [],
 				balance: {

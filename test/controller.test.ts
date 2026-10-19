@@ -69,10 +69,9 @@ test("startup refresh does not block and a manual refresh is not dropped", async
 		await manual;
 
 		assert.equal(requests, 2);
-		assert.ok(
-			notifications.includes("No Codex CLIProxyAPI accounts found."),
-		);
-		assert.equal(widget, undefined);
+		assert.ok(notifications.some((message) => message.includes("Usage state: empty")));
+		assert.equal(controller.getSnapshot(ctx).state, "empty");
+		assert.notEqual(widget, undefined);
 	} finally {
 		controller.shutdown(ctx);
 		globalThis.fetch = originalFetch;
@@ -215,13 +214,9 @@ test("mixed refresh updates successful accounts and keeps failed account cache",
 		});
 		assert.ok(details.length <= 12);
 		assert.match(details[0] ?? "", /CLIProxyAPI Usage/);
-		assert.ok(
-			details.some((line) =>
-				line.includes(
-					"Refresh failed: personal@example.com: HTTP 503 · showing cached data",
-				),
-			),
-		);
+		assert.ok(details.some((line) => line.includes("HTTP 503")));
+		assert.ok(details.some((line) => line.includes("cached")));
+		assert.ok(details.some((line) => line.includes("partial")));
 		assert.ok(
 			details.some((line) => line.includes("personal@example.com")),
 		);
@@ -335,11 +330,8 @@ test("failed refresh keeps cached usage and exposes the error in details", async
 		const beforeDetails = requests;
 		await controller.showDetails(ctx);
 		assert.equal(requests, beforeDetails);
-		assert.ok(
-			details.some((line) =>
-				line.includes("Refresh failed: management HTTP 503 · showing cached data"),
-			),
-		);
+		assert.ok(details.some((line) => line.includes("management HTTP 503")));
+		assert.ok(details.some((line) => line.includes("cached")));
 		assert.ok(details.some((line) => line.includes("work@example.com")));
 		assert.ok(details.some((line) => line.includes("left 75%")));
 	} finally {

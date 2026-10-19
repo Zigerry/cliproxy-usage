@@ -5,19 +5,21 @@ import {
 } from "@earendil-works/pi-tui";
 import { PROVIDER_LABELS } from "./providers.js";
 import type {
-	AccountBalance,
 	AccountUsage,
+	AccountUsageSnapshot,
 	BalanceAmount,
 	ProviderName,
+	ReadonlyAccountBalance,
 	Theme,
 	UiContext,
 	UsageWindow,
+	UsageSnapshot,
 } from "./types.js";
 
 const CLAUDE_ORANGE = "\u001b[38;5;208m";
 
 /** Remaining quota in percent, clamped to 0-100. */
-export function remainingPercent(window: UsageWindow): number {
+export function remainingPercent(window: Readonly<UsageWindow>): number {
 	return Math.max(0, Math.min(100, 100 - window.used));
 }
 
@@ -36,12 +38,13 @@ export function usageBar(percent: number, width = 8): string {
 	return "━".repeat(filled) + "─".repeat(width - filled);
 }
 
-function formatWindow(window: UsageWindow): string {
+function formatWindow(window: Readonly<UsageWindow>): string {
 	const remaining = remainingPercent(window);
 	return `${window.label} ${usageBar(remaining)} left ${Math.round(remaining)}%`;
 }
 
 export function formatResetTime(resetsAt: Date, now = Date.now()): string {
+	if (!Number.isFinite(resetsAt.getTime()) || !Number.isFinite(now)) return "reset unknown";
 	const remainingMinutes = Math.max(
 		0,
 		Math.ceil((resetsAt.getTime() - now) / 60_000),
@@ -58,7 +61,7 @@ export function formatResetTime(resetsAt: Date, now = Date.now()): string {
 	return `resets in ${days}d${remainingHours ? ` ${remainingHours}h` : ""}`;
 }
 
-function formatDetailWindow(window: UsageWindow, now: number): string {
+function formatDetailWindow(window: Readonly<UsageWindow>, now: number): string {
 	const reset = window.resetsAt ? ` · ${formatResetTime(window.resetsAt, now)}` : "";
 	return `${formatWindow(window)}${reset}`;
 }
@@ -70,7 +73,7 @@ function fitLabel(text: string, width: number): string {
 	return `${sliceByColumn(text, 0, contentWidth, true)}${ellipsis}`;
 }
 
-export function formatBalanceAmount(value: BalanceAmount): string {
+export function formatBalanceAmount(value: Readonly<BalanceAmount>): string {
 	const symbols: Record<string, string> = {
 		CNY: "¥",
 		EUR: "€",
@@ -86,12 +89,12 @@ export function formatBalanceAmount(value: BalanceAmount): string {
 		: `${amount} ${currency}`;
 }
 
-export function formatBalance(balance: AccountBalance): string {
+export function formatBalance(balance: ReadonlyAccountBalance): string {
 	return balance.amounts.map(formatBalanceAmount).join(" / ");
 }
 
-function itemPriority(item: AccountUsage): number {
-	if (item.error) return Number.POSITIVE_INFINITY;
+function itemPriority(item: AccountUsageSnapshot): number {
+	if (item.result === "error" || item.error) return Number.POSITIVE_INFINITY;
 	if (item.balance) {
 		const amount = Math.min(...item.balance.amounts.map((value) => value.amount));
 		return Number.isFinite(amount) ? -amount : Number.NEGATIVE_INFINITY;
@@ -116,6 +119,92 @@ export function formatDetails(items: AccountUsage[], now = Date.now()): string {
 		.join("\n");
 }
 
+/** Short, shared state annotation; refreshing never masks retained failures. */
+export function snapshotStatusText(snapshot: UsageSnapshot): string {
+	const parts: string[] = [];
+	if (snapshot.refreshing && snapshot.state !== "loading") parts.push("refreshing");
+	const primary = snapshot.state === "ready" ? ""
+		: snapshot.state === "setup-required" ? "setup required"
+		: snapshot.state === "empty" ? "no accounts"
+		: snapshot.state === "idle" ? "not refreshed" : snapshot.state;
+	if (primary) parts.push(primary);
+	if (snapshot.stale) parts.push("stale");
+	if (snapshot.partial) parts.push("partial");
+	if (snapshot.accounts.some((item) => item.cached)) parts.push("cached");
+	if (snapshot.error || snapshot.accounts.some((item) => item.result === "error" || item.error)) {
+		parts.push("error");
+	}
+	return [...new Set(parts)].join(" · ");
+}
+
+function timestamp(at: number | undefined): string | undefined {
+	if (at === undefined || !Number.isFinite(at)) return undefined;
+	const date = new Date(at);
+	return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+}
+
+/** Safe age of a last-valid fact, not the age of the most recent refresh attempt. */
+export function formatUsageAge(at: number | undefined, now: number): string {
+	if (at === undefined || !timestamp(at) || !timestamp(now)) return "unknown";
+	const minutes = Math.floor(Math.max(0, now - at) / 60_000);
+	if (minutes < 60) return `${minutes}m`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) return `${hours}h${minutes % 60 ? ` ${minutes % 60}m` : ""}`;
+	return `${Math.floor(hours / 24)}d${hours % 24 ? ` ${hours % 24}h` : ""}`;
+}
+
+/** Snapshot facts shared by details and non-TUI/status output. No cache inference. */
+export function formatAccountSnapshotMetadata(item: AccountUsageSnapshot, now: number): string[] {
+	const facts: string[] = [];
+	if (item.lastValidAt !== undefined) {
+		facts.push(`${item.result === "unknown" ? "last valid " : ""}data age: ${formatUsageAge(item.lastValidAt, now)}`);
+	}
+	if (item.result === "unknown") facts.push("unknown");
+	if (item.cached) facts.push("cached");
+	if (item.stale) facts.push("stale");
+	if (item.error) facts.push(`error: ${item.error}`);
+	else if (item.result === "error") facts.push("error");
+	if (!item.queried) facts.push("not queried in latest outcome");
+	const lines = facts.length ? [facts.join(" · ")] : [];
+	if (item.attemptedAt !== undefined) {
+		lines.push(`Last query attempt: ${timestamp(item.attemptedAt) ?? "unknown"}`);
+	}
+	return lines;
+}
+
+export function configurationStatusText(configuration: UsageSnapshot["configuration"]): string {
+	if (configuration.status !== "setup-required") return "";
+	if (configuration.message) return configuration.message;
+	switch (configuration.reason) {
+		case "missing-key": return "Management key is missing; run /cliproxy-usage setup.";
+		case "missing-url": return "Management URL is missing; configure /cliproxy-usage settings.";
+		case "invalid-source": return "Management source is invalid; check /cliproxy-usage settings.";
+		case "rejected": return "Management access was rejected; run /cliproxy-usage setup.";
+	}
+}
+
+/** Full metadata and data from the same snapshot used by both live views. */
+export function formatSnapshotDetails(snapshot: UsageSnapshot): string {
+	const lines = [
+		`Usage state: ${snapshot.state}`,
+		...(snapshotStatusText(snapshot) ? [`Status: ${snapshotStatusText(snapshot)}`] : []),
+		`Last refresh: ${timestamp(snapshot.lastCompleteSuccessAt) ?? "never"} (complete success)`,
+		`Last attempt: ${timestamp(snapshot.lastAttemptAt) ?? "never"}`,
+	];
+	const configuration = configurationStatusText(snapshot.configuration);
+	if (configuration) lines.push(configuration);
+	if (snapshot.error) lines.push(`Error: ${snapshot.error}`);
+	for (const item of snapshot.accounts) {
+		const identity = item.label ? `${item.provider}/${item.label}` : item.provider;
+		const data = item.result === "unknown" ? "unknown"
+			: item.balance ? formatBalance(item.balance) || "unknown"
+			: item.windows.map((window) => formatDetailWindow(window, snapshot.generatedAt)).join(" · ") || item.result;
+		lines.push(`${identity}: ${data}`);
+		for (const metadata of formatAccountSnapshotMetadata(item, snapshot.generatedAt)) lines.push(`  ${metadata}`);
+	}
+	return lines.join("\n");
+}
+
 export function clearUsage(ctx: UiContext): void {
 	ctx.ui.setStatus("cliproxy-usage", undefined);
 	ctx.ui.setWidget("cliproxy-usage", undefined);
@@ -123,13 +212,15 @@ export function clearUsage(ctx: UiContext): void {
 
 export function renderUsage(
 	ctx: UiContext,
-	items: AccountUsage[],
+	snapshot: UsageSnapshot,
 	maxVisibleAccounts: number,
 ): void {
-	if (!items.length) {
+	if (snapshot.state === "unsupported" || snapshot.state === "disabled") {
 		ctx.ui.setWidget("cliproxy-usage", undefined);
 		return;
 	}
+	const items = snapshot.accounts;
+	const status = snapshotStatusText(snapshot);
 	const visibleItems = items
 		.map((item, index) => ({
 			item,
@@ -148,6 +239,7 @@ export function renderUsage(
 		(_tui: unknown, theme: Theme) => ({
 			invalidate() {},
 			render(width: number): string[] {
+				if (width <= 0) return [];
 				const gap = 4;
 				const providers = new Set(visibleItems.map((item) => item.provider));
 				const groupedProvider =
@@ -174,8 +266,8 @@ export function renderUsage(
 								: ""
 							: provider + separator + (item.label ? account + separator : "");
 						let content: string;
-						if (item.error) {
-							content = paint("error", `! ${item.error}`);
+						if (item.result === "unknown") {
+							content = paint("dim", "unknown");
 						} else if (item.balance) {
 							const amount = formatBalance(item.balance);
 							const unavailable =
@@ -199,8 +291,14 @@ export function renderUsage(
 							});
 							content = meters.length
 								? meters.join(paint("dim", " │ "))
-								: paint("dim", "–");
+								: paint("dim", item.result === "error" ? "" : "unknown");
 						}
+						const annotations = [
+							...(item.cached ? ["cached"] : []),
+							...(item.stale ? ["stale"] : []),
+							...(item.error ? [`! ${item.error}`] : item.result === "error" ? ["error"] : []),
+						];
+						if (annotations.length) content += paint(item.error ? "error" : "dim", `${content ? " · " : ""}${annotations.join(" · ")}`);
 						const card = `${prefix}${content}`;
 						return truncateToWidth(card, width, "");
 					});
@@ -228,7 +326,7 @@ export function renderUsage(
 					return {
 						barWidth,
 						rows,
-						maxColumns: Math.max(...rows.map((row) => row.length)),
+						maxColumns: Math.max(0, ...rows.map((row) => row.length)),
 					};
 				});
 				candidates.sort(
@@ -239,7 +337,8 @@ export function renderUsage(
 				);
 				const layout = candidates[0];
 				const rows = packCards(buildCards(layout?.barWidth ?? 8, true));
-				const lines: string[] = [];
+				const lines: string[] = status
+					? [truncateToWidth(theme.fg("dim", status), width, "")] : [];
 				if (groupedProvider) {
 					const count = items.length;
 					const kind = groupedProvider === "deepseek" ? "balance" : "quota";

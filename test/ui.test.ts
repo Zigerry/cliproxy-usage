@@ -7,10 +7,24 @@ import {
 	formatResetTime,
 	remainingColor,
 	remainingPercent,
-	renderUsage,
+	renderUsage as renderSnapshotUsage,
 	usageBar,
 } from "../src/ui.js";
-import type { Theme, UiContext, UsageWindow } from "../src/types.js";
+import type { AccountUsage, Theme, UiContext, UsageSnapshot, UsageWindow } from "../src/types.js";
+
+// Raw parser fixtures stay test-only; production rendering accepts snapshots only.
+function renderUsage(ctx: UiContext, items: AccountUsage[], max: number): void {
+	const snapshot: UsageSnapshot = {
+		provider: items[0]?.provider,
+		state: "ready", configuration: { status: "ready" },
+		refreshing: false, stale: false, partial: false, generatedAt: 0,
+		accounts: items.map((item) => ({
+			...item, queried: true, result: item.error ? "error" : "valid",
+			cached: false, stale: false,
+		})),
+	};
+	renderSnapshotUsage(ctx, snapshot, max);
+}
 
 test("formatBalanceAmount renders common currency symbols", () => {
 	assert.equal(formatBalanceAmount({ currency: "CNY", amount: 42.5 }), "¥42.50");
@@ -270,11 +284,12 @@ test("renderUsage limits rows and prioritizes errors then highest usage", () => 
 		2,
 	);
 	const lines = render();
-	assert.equal(lines.length, 2);
-	assert.match(lines[0] ?? "", /broken/);
-	assert.match(lines[0] ?? "", /high/);
+	assert.equal(lines.length, 3);
+	assert.equal(lines[0], "error");
+	assert.match(lines[1] ?? "", /broken/);
+	assert.match(lines[1] ?? "", /high/);
 	assert.equal(
-		lines[1],
+		lines[2],
 		"… 1 more account · /cliproxy-usage for details",
 	);
 });
@@ -347,4 +362,17 @@ test("formatDetails handles empty, success, errors, and missing data", () => {
 			"codex/empty: No usage window",
 		].join("\n"),
 	);
+});
+
+test("renderUsage retains Claude orange and the 8/6/4 adaptive meter widths", () => {
+	const { ctx, render } = createContext();
+	renderUsage(ctx, ["alpha", "beta", "gamma"].map((label) => ({
+		provider: "claude" as const, label, windows: [{ label: "7d", used: 50 }],
+	})), 4);
+	for (const [width, bar] of [[91, "━━━━────"], [85, "━━━───"], [79, "━━──"]] as const) {
+		const lines = render(width);
+		assert.equal(lines.length, 2);
+		assert.match(lines[0] ?? "", /\u001b\[38;5;208mClaude/);
+		assert.equal(lines[1]?.split(bar).length, 4, `${width} columns uses ${bar.length} cells`);
+	}
 });

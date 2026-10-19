@@ -31,7 +31,9 @@ work… │ 7d ━━━━━─ left 85%    personal… │ 7d ━━━━─
 - Opens details immediately from the session cache when available.
 - Refreshes stale data in the background and updates the TUI in place.
 - Supports `r` force refresh and `↑`/`↓` scrolling.
-- Keeps cached data visible when a refresh fails.
+- Keeps cached data visible when a refresh fails, with explicit cached/stale/error annotations.
+- Tracks each account's last valid data separately from refresh attempts and complete provider refreshes.
+- Distinguishes unknown data, empty account discovery, loading, partial failure, and missing setup.
 - Coalesces overlapping automatic and manual refresh requests.
 - Isolates fallback data by Management source and stable account identity, not display names.
 - Cancels obsolete work after logout, configuration changes, provider disablement, or session shutdown.
@@ -111,7 +113,7 @@ pi update --extension https://github.com/Zigerry/cliproxy-usage.git
 | `/cliproxy-usage login` | Alias for `setup` |
 | `/cliproxy-usage logout` | Remove the saved Management API password |
 | `/cliproxy-usage settings` | Configure URL, refresh interval, widget account limit, and providers |
-| `/cliproxy-usage status` | Show effective configuration and refresh state |
+| `/cliproxy-usage status` | Show configuration and the shared cache/freshness state without provider requests |
 
 Details controls:
 
@@ -120,6 +122,14 @@ Details controls:
 - Enter / Esc: close and return to Pi
 
 Outside TUI mode, no interactive view is opened; UI-capable modes fall back to a text notification.
+
+### Cache freshness
+
+Widget, details, and status use the same account-level snapshot. Failed reads can show the last valid value marked `cached`/`stale`; a successful response without usable values shows `unknown`, never the old number or an assumed 100% remaining. A genuine zero quota or zero balance stays visible.
+
+Data becomes stale when it reaches the configured refresh age, a reported reset is due, or a refresh failure applies. Local expiry only redraws the display: it neither queries the provider nor replenishes quota. Bar colors still represent remaining quota, not freshness.
+
+Details keep status/errors visible while scrolling and show data age and last actual query-attempt round. `Last refresh` in status means the last **complete** success; partial success only advances the successful accounts' data times. Old details close on provider/source/login/session invalidation rather than freezing on old accounts. Usage data and timestamps remain session-only.
 
 ## Configuration
 

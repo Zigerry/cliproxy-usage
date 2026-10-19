@@ -78,7 +78,7 @@ test("unavailable accounts keep identity and successful discovery includes every
 	const result = await readAccounts(settings(), { providers: ["codex"] });
 	assert.equal(result.managementAuthFailed, false);
 	assert.deepEqual(success(result, "codex").map(({ accountId, error }) => ({ accountId, error })), [
-		{ accountId: "a", error: "offline" }, { accountId: "b", error: "HTTP 500" },
+		{ accountId: "a", error: "account unavailable" }, { accountId: "b", error: "HTTP 500" },
 	]);
 	assert.equal(calls, 2);
 });

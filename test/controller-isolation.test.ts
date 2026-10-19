@@ -118,7 +118,9 @@ test("discovery failure preserves the collection but malformed discovery cannot 
 		assert.match(h.render(), /kept.*left 80%/);
 	}
 	await h.refresh();
-	assert.equal(h.render(), "");
+	assert.equal(h.controller.getSnapshot(h.ctx).state, "empty");
+	assert.deepEqual(h.controller.getSnapshot(h.ctx).accounts, []);
+	assert.match(h.render(), /no accounts/);
 });
 
 test("missing IDs never reuse old quota and successful unknown responses replace old data", async (t) => {
@@ -198,7 +200,9 @@ for (const stage of ["discovery", "quota", "body"] as const) {
 		await flush();
 		assert.equal(signal?.aborted, true);
 		assert.equal(oldSettled, true);
-		assert.equal(h.render(), "");
+		assert.equal(h.controller.getSnapshot(h.ctx).state, "setup-required");
+		assert.deepEqual(h.controller.getSnapshot(h.ctx).accounts, []);
+		assert.doesNotMatch(h.render(), /left \d+%/);
 		block = false;
 		h.settings.managementKey = "synthetic-two";
 		await h.save();
