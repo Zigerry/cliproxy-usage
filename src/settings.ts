@@ -147,12 +147,12 @@ export async function loadSettings(
 			path: settingsPath,
 			writable: true,
 		};
-	} catch (error) {
+	} catch {
 		return {
 			settings: structuredClone(DEFAULT_SETTINGS),
 			raw: {},
 			path: settingsPath,
-			warnings: [(error as Error).message],
+			warnings: ["Invalid settings file; expected a JSON object."],
 			writable: false,
 		};
 	}
