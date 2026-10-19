@@ -1,6 +1,6 @@
 # Batch B verification
 
-Scope: #17, stacked on parsing PR #16. Implementation and test results saved; advisor completion review pending. No automatic merge, release, cache persistence or C/D/E UI/state behavior is included.
+Scope: #17, stacked on parsing PR #16. Implementation and advisor completion review passed within this identity/cancellation scope. No automatic merge, release, cache persistence or C/D/E UI/state behavior is included.
 
 ## Changes
 
@@ -47,4 +47,4 @@ The synthetic, network-guarded PTY fixture from the separate compatibility branc
 
 Each run checked a fresh details row after `r`, overlay close/reopen, settings/status, model switches and orderly shutdown, with exactly two discovery and two synthetic quota reads and no unexpected guarded network attempts. Output was drained between operations to avoid stale redraw matches. Orderly process exit alone is not proof of complete timer disposal.
 
-These runs do not cover real credentials/accounts, every terminal, arbitrary widths or every host lifecycle path. C's freshness/status model, D's retry/backoff semantics and E's layout/theme work remain separate batches.
+These runs do not cover real credentials/accounts, every terminal, arbitrary widths or every host lifecycle path. The existing provider-level update time is not a guarantee that every account is fresh: per-account timestamps, partial-success freshness and a shared status snapshot belong to C. D's retry/backoff semantics and E's layout/theme work also remain separate batches.
