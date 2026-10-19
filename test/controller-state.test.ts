@@ -129,7 +129,8 @@ test("unknown response hides old data and discovery failure does not fabricate a
 	assert.equal(failed.accounts.find((a) => a.accountId === "a")?.attemptedAt, START + 60_000);
 	assert.deepEqual(failed.accounts.find((a) => a.accountId === "b")?.windows, []);
 	h.phase = "empty";
-	await h.refresh();
+	// D's automatic local backoff is bypassed intentionally for this state transition.
+	await h.controller.refreshCurrent(h.ctx, { force: true });
 	assert.equal(h.snapshot().state, "empty");
 	assert.deepEqual(h.snapshot().accounts, []);
 	assert.match(h.render().toLowerCase(), /no .*accounts|no accounts/);

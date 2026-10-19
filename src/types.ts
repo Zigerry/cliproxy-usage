@@ -33,6 +33,28 @@ export type AccountBalance = {
 	amounts: BalanceAmount[];
 };
 
+export type RequestFailure = {
+	readonly scope: "management" | "provider";
+	readonly category: "rate-limit" | "server" | "network" | "timeout" | "auth" | "http" | "invalid-response";
+	readonly status?: number;
+	readonly retryAfterAt?: number;
+};
+
+export type RetryState = {
+	readonly failures: number;
+	readonly backoffUntil?: number;
+	readonly serverUntil?: number;
+};
+
+export type RefreshEligibility = {
+	readonly managementServerUntil?: number;
+	readonly providerServerUntil?: number;
+	readonly backoffUntil?: number;
+	readonly manualAllowedAt?: number;
+	readonly automaticAllowedAt?: number;
+	readonly nextAutomaticCheckAt?: number;
+};
+
 export type AccountUsage = {
 	provider: ProviderName;
 	/** Opaque Management auth_index; never a display label or credential. */
@@ -43,15 +65,18 @@ export type AccountUsage = {
 	windows: UsageWindow[];
 	balance?: AccountBalance;
 	error?: string;
+	failure?: RequestFailure;
 };
 
 export type ProviderReadResult =
 	| { provider: ProviderName; discovery: "success"; items: AccountUsage[] }
-	| { provider: ProviderName; discovery: "failure"; error: string };
+	| { provider: ProviderName; discovery: "failure"; error: string; failure?: RequestFailure; attempted?: boolean };
 
 export type ReadAccountsResult = {
 	providers: ProviderReadResult[];
 	managementAuthFailed: boolean;
+	/** Only actual Management request completions, never inherited/skipped errors. */
+	management?: { attempted: boolean; failures: RequestFailure[] };
 };
 
 export type UsageData = {
@@ -76,6 +101,7 @@ export type ProviderUsageState = {
 	lastAttemptAt?: number;
 	discovery?: { result: "success" | "error"; at: number; error?: string };
 	lastCompleteSuccessAt?: number;
+	retry?: RetryState;
 };
 
 export type UsageConfiguration =
@@ -115,6 +141,7 @@ export type UsageSnapshot = {
 	readonly lastCompleteSuccessAt?: number;
 	readonly error?: string;
 	readonly generatedAt: number;
+	readonly eligibility?: RefreshEligibility;
 };
 
 export type Theme = {

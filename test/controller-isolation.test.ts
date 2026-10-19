@@ -114,10 +114,11 @@ test("discovery failure preserves the collection but malformed discovery cannot 
 	};
 	await h.refresh();
 	for (phase = 1; phase <= 2; phase++) {
-		await h.refresh();
+		// Explicit manual retries exercise discovery instead of D's local backoff.
+		await h.controller.refreshCurrent(h.ctx, { force: true });
 		assert.match(h.render(), /kept.*left 80%/);
 	}
-	await h.refresh();
+	await h.controller.refreshCurrent(h.ctx, { force: true });
 	assert.equal(h.controller.getSnapshot(h.ctx).state, "empty");
 	assert.deepEqual(h.controller.getSnapshot(h.ctx).accounts, []);
 	assert.match(h.render(), /no accounts/);

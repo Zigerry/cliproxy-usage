@@ -83,6 +83,7 @@ test("mixed refresh updates successful accounts and keeps failed account cache",
 	let phase: "initial" | "partial" = "initial";
 	let widget: unknown;
 	let details: string[] = [];
+	let scrolledDetails: string[] = [];
 	let customOptions: unknown;
 	const theme = {
 		fg: (_color: string, text: string) => text,
@@ -110,6 +111,8 @@ test("mixed refresh updates successful accounts and keeps failed account cache",
 				};
 				const component = await factory(tui, theme, {}, () => {});
 				details = component.render(80);
+				component.handleInput("\x1b[6~");
+				scrolledDetails = component.render(80);
 				component.handleInput?.("\x1b");
 				component.dispose?.();
 			},
@@ -217,10 +220,12 @@ test("mixed refresh updates successful accounts and keeps failed account cache",
 		assert.ok(details.some((line) => line.includes("HTTP 503")));
 		assert.ok(details.some((line) => line.includes("cached")));
 		assert.ok(details.some((line) => line.includes("partial")));
+		assert.ok(scrolledDetails.length <= 12);
+		assert.ok(scrolledDetails.some((line) => line.includes("partial")));
 		assert.ok(
-			details.some((line) => line.includes("personal@example.com")),
+			scrolledDetails.some((line) => line.includes("personal@example.com")),
 		);
-		assert.ok(details.some((line) => line.includes("left 60%")));
+		assert.ok(scrolledDetails.some((line) => line.includes("left 60%")));
 	} finally {
 		controller.shutdown(ctx);
 		globalThis.fetch = originalFetch;

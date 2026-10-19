@@ -6,6 +6,7 @@ import { abortable } from "./abort.js";
 import { UsageDetailsComponent } from "./details-ui.js";
 import { PROVIDERS, PROVIDER_LABELS } from "./providers.js";
 import { CoalescingAsyncQueue } from "./refresh.js";
+import { deriveEligibility, isEligible, updateRetry } from "./retry.js";
 import {
 	DEFAULT_SETTINGS,
 	type LoadedSettings,
@@ -19,7 +20,7 @@ import {
 } from "./usage.js";
 import { applyProviderRead, beginProviderRead, deriveUsageSnapshot, nextFreshnessDeadline, safeUsageText } from "./state.js";
 import { clearUsage, formatSnapshotDetails, renderUsage } from "./ui.js";
-import type { ProviderName, ProviderUsageState, Settings, UsageConfiguration, UsageSnapshot } from "./types.js";
+import type { ProviderName, ProviderUsageState, RetryState, Settings, UsageConfiguration, UsageSnapshot } from "./types.js";
 
 type RefreshRequest = {
 	readonly generation: number;
@@ -48,6 +49,9 @@ function uniqueProviders(...groups: ProviderName[][]): ProviderName[] {
 
 export class UsageController {
 	private timer: ReturnType<typeof setInterval> | undefined;
+	private refreshContext: ExtensionContext | undefined;
+	private nextAutomaticCheckAt: number | undefined;
+	private managementRetry: RetryState | undefined;
 	private readonly providerStates = new Map<ProviderName, ProviderUsageState>();
 	private settingsKnown = false;
 	private ageTimer: ReturnType<typeof setTimeout> | undefined;
@@ -99,15 +103,21 @@ export class UsageController {
 	}
 
 	private snapshotForProvider(provider?: ProviderName, now = Date.now()): UsageSnapshot {
-		return deriveUsageSnapshot({
+		const configuration = this.configuration();
+		const nextCheck = this.active && this.timer && this.refreshContext && provider &&
+			this.providerForContext(this.refreshContext) === provider && this.settingsSnapshot.providers[provider] &&
+			configuration.status === "ready" ? this.nextAutomaticCheckAt : undefined;
+		const eligibility = provider && this.settingsSnapshot.providers[provider]
+			? deriveEligibility(this.managementRetry, this.providerStates.get(provider)?.retry, now, nextCheck) : undefined;
+		return { ...deriveUsageSnapshot({
 			provider,
 			enabled: Boolean(provider && this.settingsSnapshot.providers[provider]),
-			configuration: this.configuration(),
+			configuration,
 			record: provider ? this.providerStates.get(provider) : undefined,
 			refreshing: Boolean(provider && this.providerIsRefreshing(provider)),
 			now,
 			maxAgeMs: this.settingsSnapshot.refreshMinutes * 60_000,
-		});
+		}), ...(eligibility ? { eligibility } : {}) };
 	}
 
 	getSnapshot(ctx: ExtensionContext, now = Date.now()): UsageSnapshot {
@@ -129,11 +139,13 @@ export class UsageController {
 	private scheduleExpiry(ctx: ExtensionContext, snapshot: UsageSnapshot): void {
 		this.clearAgeTimer();
 		if (!this.active || ctx.mode !== "tui" || !snapshot.provider ||
-			["unsupported", "disabled", "setup-required"].includes(snapshot.state)) return;
+			["unsupported", "disabled"].includes(snapshot.state)) return;
 		const now = snapshot.generatedAt;
-		const deadline = nextFreshnessDeadline(this.providerStates.get(snapshot.provider), now,
-			this.settingsSnapshot.refreshMinutes * 60_000);
-		if (deadline === undefined || !Number.isFinite(deadline) || deadline <= now) return;
+		const candidates = [nextFreshnessDeadline(this.providerStates.get(snapshot.provider), now,
+			this.settingsSnapshot.refreshMinutes * 60_000), snapshot.eligibility?.manualAllowedAt,
+			snapshot.eligibility?.automaticAllowedAt].filter((at): at is number => at !== undefined && Number.isFinite(at) && at > now);
+		if (!candidates.length) return;
+		const deadline = Math.min(...candidates);
 		const owner = { ctx, generation: this.generation };
 		this.ageOwner = owner;
 		this.ageTimer = setTimeout(() => {
@@ -228,11 +240,16 @@ export class UsageController {
 	}
 
 	private clearProviderCache(provider: ProviderName): void {
-		this.providerStates.delete(provider);
+		const serverUntil = this.providerStates.get(provider)?.retry?.serverUntil;
+		if (serverUntil !== undefined && serverUntil > Date.now()) {
+			// Disable removes account data, not an unexpired provider server instruction.
+			this.providerStates.set(provider, { provider, accounts: [], retry: { failures: 0, serverUntil } });
+		} else this.providerStates.delete(provider);
 	}
 
 	private clearAllCaches(): void {
 		this.providerStates.clear();
+		this.managementRetry = undefined;
 		this.clearAgeTimer();
 	}
 
@@ -315,6 +332,9 @@ export class UsageController {
 			this.rejectedManagementKey = undefined;
 		}
 		this.sourceBoundary = { source: structuredClone(source), key: loaded.settings.managementKey };
+		if (this.timer && loaded.settings.refreshMinutes !== this.settingsSnapshot.refreshMinutes) {
+			this.scheduleRefresh(this.refreshContext ?? request.ctx, loaded.settings.refreshMinutes);
+		}
 		this.settingsKnown = true;
 		this.settingsSnapshot = structuredClone(loaded.settings);
 		this.maxVisibleAccounts = loaded.settings.maxVisibleAccounts;
@@ -326,14 +346,23 @@ export class UsageController {
 		const rejected = this.rejectedManagementKey === loaded.settings.managementKey;
 		const configuration = this.configuration();
 		const cannotRead = configuration.status === "setup-required" && configuration.reason !== "rejected";
-		if (!operation.providers.length || cannotRead || (rejected && !request.force && !request.notifyProviders.length)) {
+		if (!operation.providers.length || cannotRead || (rejected && !request.force)) {
 			this.publish(request.ctx);
 			for (const provider of request.notifyProviders) this.notifyProviderState(request.ctx, provider);
 			return;
 		}
 
 		const attemptedAt = Date.now();
+		operation.providers = operation.providers.filter((provider) => isEligible(
+			deriveEligibility(this.managementRetry, this.providerStates.get(provider)?.retry, attemptedAt), request.force, attemptedAt));
+		if (!operation.providers.length) {
+			this.publish(request.ctx);
+			for (const provider of request.notifyProviders) this.notifyProviderState(request.ctx, provider);
+			return;
+		}
+		const previousStates = new Map<ProviderName, ProviderUsageState | undefined>();
 		for (const provider of operation.providers) {
+			previousStates.set(provider, this.providerStates.get(provider));
 			this.providerStates.set(provider, beginProviderRead(this.providerStates.get(provider), provider, attemptedAt));
 		}
 		this.publish(request.ctx);
@@ -341,9 +370,22 @@ export class UsageController {
 		const results = await readAccounts(loaded.settings, { source, providers: operation.providers, signal: operation.controller.signal });
 		if (!this.owns(operation)) return;
 		const completedAt = Date.now();
+		const intervalMs = loaded.settings.refreshMinutes * 60_000;
+		this.managementRetry = updateRetry(this.managementRetry,
+			results.management ?? { attempted: false, failures: [] }, completedAt, intervalMs);
 		for (const result of results.providers) {
-			this.providerStates.set(result.provider, applyProviderRead(this.providerStates.get(result.provider), result,
-				{ attemptedAt, completedAt }, [loaded.settings.managementKey]));
+			// Use pre-begin facts: skipped discovery must roll back the provisional
+			// provider attempt while keeping source eligibility visible separately.
+			const previous = previousStates.get(result.provider);
+			const record = applyProviderRead(previous, result,
+				{ attemptedAt, completedAt }, [loaded.settings.managementKey]);
+			const actualProviderRead = result.discovery === "success" && result.items.some((item) => item.queried && item.failure?.scope !== "management");
+			const complete = result.discovery === "success" && !result.items.some((item) => item.failure?.scope === "management");
+			const attempted = actualProviderRead || complete;
+			const failures = result.discovery === "success" ? result.items.flatMap((item) =>
+				item.queried && item.failure?.scope === "provider" ? [item.failure] : []) : [];
+			record.retry = updateRetry(previous?.retry, { attempted, complete, failures }, completedAt, intervalMs);
+			this.providerStates.set(result.provider, record);
 		}
 		this.rejectedManagementKey = results.managementAuthFailed ? loaded.settings.managementKey : undefined;
 		this.publish(request.ctx);
@@ -374,6 +416,7 @@ export class UsageController {
 		} = {},
 	): Promise<void> {
 		if (!this.active) return Promise.resolve();
+		if (this.timer) this.refreshContext = ctx;
 		const provider = this.providerForContext(ctx);
 		if (!provider) {
 			if (options.loaded) {
@@ -494,11 +537,24 @@ export class UsageController {
 	}
 
 	private scheduleRefresh(ctx: ExtensionContext, minutes: number): void {
-		if (this.timer) clearInterval(this.timer);
+		this.clearRefreshTimer();
+		this.refreshContext = ctx;
+		const intervalMs = minutes * 60_000;
+		this.nextAutomaticCheckAt = Date.now() + intervalMs;
 		this.timer = setInterval(() => {
-			this.reportBackgroundError(ctx, this.refreshCurrent(ctx));
-		}, minutes * 60_000);
+			if (!this.active || !this.refreshContext) return;
+			this.nextAutomaticCheckAt = Date.now() + intervalMs;
+			const current = this.refreshContext;
+			this.reportBackgroundError(current, this.refreshCurrent(current));
+		}, intervalMs);
 		this.timer.unref?.();
+	}
+
+	private clearRefreshTimer(): void {
+		if (this.timer) clearInterval(this.timer);
+		this.timer = undefined;
+		this.refreshContext = undefined;
+		this.nextAutomaticCheckAt = undefined;
 	}
 
 	start(ctx: ExtensionContext, loaded: LoadedSettings): void {
@@ -518,8 +574,7 @@ export class UsageController {
 	shutdown(ctx: ExtensionContext): void {
 		this.active = false;
 		this.invalidateWork();
-		if (this.timer) clearInterval(this.timer);
-		this.timer = undefined;
+		this.clearRefreshTimer();
 		this.clearAllCaches();
 		this.rejectedManagementKey = undefined;
 		this.lastSettingsWarning = undefined;
@@ -534,6 +589,7 @@ export class UsageController {
 		provider: ProviderName | undefined,
 	): void {
 		if (!this.active) return;
+		if (this.timer) this.refreshContext = ctx;
 		this.closeDetails(provider && this.settingsSnapshot.providers[provider] ? provider : undefined);
 		this.publish(ctx);
 		if (!provider || !this.settingsSnapshot.providers[provider]) return;
@@ -590,6 +646,8 @@ export class UsageController {
 
 	resetSettings(settings: Settings, ctx?: ExtensionContext): void {
 		this.invalidateWork(ctx);
+		if (ctx && this.timer) this.refreshContext = ctx;
+		else if (!ctx) this.clearRefreshTimer();
 		this.settingsKnown = true;
 		this.settingsSnapshot = structuredClone(settings);
 		this.clearAllCaches();
@@ -600,6 +658,10 @@ export class UsageController {
 	}
 
 	syncSettings(settings: Settings, ctx?: ExtensionContext): void {
+		if (ctx && this.timer) {
+			this.refreshContext = ctx;
+			if (settings.refreshMinutes !== this.settingsSnapshot.refreshMinutes) this.scheduleRefresh(ctx, settings.refreshMinutes);
+		}
 		const sourceChanged = settings.managementUrl !== this.settingsSnapshot.managementUrl ||
 			settings.managementKey !== this.settingsSnapshot.managementKey;
 		if (this.settingsInvalidateWork(settings)) this.invalidateWork(ctx);

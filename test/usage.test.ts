@@ -161,7 +161,7 @@ test("readAccounts queries provider quota through the remote Management API", as
 				providerConfigPath,
 				providers: ["codex"],
 			}),
-			{ managementAuthFailed: false, providers: [{
+			{ managementAuthFailed: false, management: { attempted: true, failures: [] }, providers: [{
 				provider: "codex", discovery: "success", items: [{
 					provider: "codex",
 					accountId: "codex-1",
@@ -249,7 +249,7 @@ test("readAccounts discovers official DeepSeek entries through openai-compatibil
 			);
 		};
 
-		assert.deepEqual(await readAccounts(value), { managementAuthFailed: false, providers: [{
+		assert.deepEqual(await readAccounts(value), { managementAuthFailed: false, management: { attempted: true, failures: [] }, providers: [{
 			provider: "deepseek", discovery: "success", items: [{
 				provider: "deepseek",
 				accountId: "deepseek-1",
@@ -330,6 +330,7 @@ test("readAccounts signals rejected management credentials", async (t) => {
 	assert.deepEqual(result.providers.find((item) => item.provider === "codex"), {
 		provider: "codex", discovery: "failure",
 		error: "management authentication failed (HTTP 401); run /cliproxy-usage setup",
+		attempted: true, failure: { scope: "management", category: "auth", status: 401 },
 	});
 });
 
@@ -359,6 +360,7 @@ test("readAccounts skips disabled, unsupported, and disabled-provider records", 
 			);
 		assert.deepEqual(await readAccounts(value), {
 			managementAuthFailed: false,
+			management: { attempted: true, failures: [] },
 			providers: ["codex", "grok", "kimi"].map((provider) => ({
 				provider, discovery: "success", items: [],
 			})),
