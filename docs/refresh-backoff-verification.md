@@ -1,6 +1,6 @@
 # Batch D verification
 
-Issue #21, stacked on C PR #20 (`feat/19-usage-state`). Implementation and results saved; advisor completion review pending. No merge, release, version/SDK upgrade or E layout/theme options are included.
+Issue #21, stacked on C PR #20 (`feat/19-usage-state`). Implementation and advisor completion review passed within the documented limit/backoff scope. No merge, release, version/SDK upgrade or E layout/theme options are included.
 
 ## Behavior implemented
 
