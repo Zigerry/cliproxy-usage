@@ -1,6 +1,6 @@
 # Batch C verification
 
-Scope: #19, stacked on B PR #18. Implementation and results saved; advisor completion review pending. Retry/backoff (D), appearance/layout options (E), merging and release remain out of scope.
+Scope: #19, stacked on B PR #18. Implementation and advisor completion review passed within the shared-state/freshness scope. Retry/backoff (D), appearance/layout options (E), merging and release remain out of scope.
 
 ## Implementation
 
@@ -26,7 +26,7 @@ The pure-state commit was independently checked in an isolated checkout (120 tes
 
 New regression tests were run before the corresponding pure/Controller implementations. The read-level C tests were also replayed against the B baseline, reproducing failures before validating the C changes. All network-facing tests use synthetic configuration and mocked fetch.
 
-Checks include git diff --check, unchanged package/lockfile/runtime dependencies, and package allowlist verification (test and design files excluded).
+Checks include git diff --check, unchanged package/lockfile/runtime dependencies, and package allowlist verification (16 files including the new state module; test and design files excluded). Both SDK rows above describe local isolated verification. Until compatibility PR #15 is merged, the inherited remote workflow does not provide that two-SDK matrix.
 
 ## State and integration assertions
 
