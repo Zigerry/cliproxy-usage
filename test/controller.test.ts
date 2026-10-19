@@ -7,8 +7,10 @@ import type {
 import { UsageController } from "../src/controller.js";
 import { DEFAULT_SETTINGS, type LoadedSettings } from "../src/settings.js";
 
-test("startup refresh does not block and a manual refresh is not dropped", async () => {
+test("startup refresh does not block and a manual refresh is not dropped", { timeout: 5000 }, async () => {
 	const originalFetch = globalThis.fetch;
+	let firstStarted!: () => void;
+	const firstEntered = new Promise<void>((resolve) => { firstStarted = resolve; });
 	let releaseFirst: (() => void) | undefined;
 	const firstResponse = new Promise<void>((resolve) => {
 		releaseFirst = resolve;
@@ -49,7 +51,7 @@ test("startup refresh does not block and a manual refresh is not dropped", async
 	try {
 		globalThis.fetch = async () => {
 			requests++;
-			if (requests === 1) await firstResponse;
+			if (requests === 1) { firstStarted(); await firstResponse; }
 			return new Response(JSON.stringify({ files: [] }), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
@@ -57,7 +59,7 @@ test("startup refresh does not block and a manual refresh is not dropped", async
 		};
 
 		controller.start(ctx, loaded);
-		await new Promise((resolve) => setImmediate(resolve));
+		await firstEntered;
 		assert.equal(requests, 1);
 
 		const manual = controller.refreshCurrent(ctx, {
