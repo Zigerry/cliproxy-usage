@@ -160,6 +160,13 @@ test("job-level release environment does not use runner-only contexts", () => {
   assert.match(publish, /"\$RUNNER_TEMP"/);
 });
 
+test("draft keeps generated release notes and public finalization does not overwrite them", () => {
+  const publish = readFileSync(new URL("../.github/workflows/publish.yml", import.meta.url), "utf8");
+  assert.match(publish, /--generate-notes/);
+  const final = publish.slice(publish.indexOf("- name: Finalize verified release"));
+  assert.doesNotMatch(final, /--notes(?:[=\s]|-file)/);
+});
+
 test("workflow wiring: one orchestrator, isolated SDK checks, draft before tgz publish, verify before public", () => {
   const publish = readFileSync(new URL("../.github/workflows/publish.yml", import.meta.url), "utf8");
   const bump = readFileSync(new URL("../.github/workflows/bump-version.yml", import.meta.url), "utf8");
@@ -174,6 +181,8 @@ test("workflow wiring: one orchestrator, isolated SDK checks, draft before tgz p
   const order = ["release.ts gate", "release.ts pack", "release.ts plan", "Stage recoverable draft", "npm publish", "release.ts verify", "Finalize verified release"].map(s => publish.indexOf(s));
   assert.ok(order.every((value, i) => value >= 0 && (i === 0 || value > order[i - 1])), order.join(","));
   assert.match(bump, /github.ref != 'refs\/heads\/main'/);
+  assert.match(bump, /persist-credentials: false/);
+  assert.ok(bump.indexOf("gh auth setup-git") < bump.indexOf("git push --atomic"));
   assert.ok(bump.indexOf("npm test") < bump.indexOf('npm version "$VERSION_BUMP"'));
   assert.match(bump, /git push --atomic origin HEAD:refs\/heads\/main "refs\/tags\/\$tag"/);
   assert.match(bump, /gh workflow run Publish --ref "\$tag" -f tag="\$tag"/);

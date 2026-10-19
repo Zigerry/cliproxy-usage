@@ -42,7 +42,7 @@ than treating this as a durable release queue.
    `gitHead`, and downloaded registry tarball bytes. New versions must be strictly
    newer than npm latest; historical retries never retag npm latest.
 5. **Prefer a GitHub draft before npm.** Create a draft targeted at the validated
-   commit, upload the exact tarball plus record, then download both and compare
+   commit with generated change notes, upload the exact tarball plus record, then download both and compare
    every byte before publication. An existing release must match tag, target
    commit, type and asset identity. Existing assets are downloaded and verified;
    mismatches stop, never overwrite. No asset-clobber option is used. A public
@@ -61,7 +61,8 @@ than treating this as a durable release queue.
    apart; transient latest-pointer replication is bounded similarly. Other
    failures stop rather than being treated as absence. A new publication's npm
    latest must be verified. The draft's downloaded assets/record are checked
-   again before making it public. `--latest=false` keeps a historical retry from
+   again before making it public. Finalization preserves generated or maintainer-edited
+   release notes rather than replacing them with a generic success line. `--latest=false` keeps a historical retry from
    becoming the GitHub latest release; it never moves npm dist-tags. A failed
    publish/verification cannot execute public finalization.
 
@@ -77,6 +78,8 @@ checks the original manifests, runs locked tests/types and a real pack inspectio
 before `npm version`. It fetches and checks main again, creates the version
 commit/tag with lifecycle scripts disabled, validates the resulting manifests,
 clean tree, tag and parent, then atomically pushes only `HEAD:main` and that tag.
+Checkout does not persist repository credentials for dependency installation/tests;
+only the final push/dispatch step configures gh's environment-backed git helper.
 No force push or protection bypass is attempted. An advanced main, protection or
 credential failure must fail visibly. It then dispatches **only Publish**, using
 `--ref "$tag" -f tag="$tag"`: GITHUB_TOKEN pushes do not themselves start tag

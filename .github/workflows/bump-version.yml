@@ -29,7 +29,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.sha }}
-          token: ${{ github.token }}
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
@@ -65,6 +65,7 @@ jobs:
           git fetch origin refs/heads/main:refs/remotes/origin/main
           node scripts/release.ts bump-tag
           # No force, no protection bypass; concurrent main movement rejects both refs.
+          gh auth setup-git --hostname github.com
           git push --atomic origin HEAD:refs/heads/main "refs/tags/$tag"
           # GITHUB_TOKEN tag pushes do not trigger workflows. Dispatch exactly once.
           gh workflow run Publish --ref "$tag" -f tag="$tag"

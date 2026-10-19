@@ -110,7 +110,8 @@ jobs:
           if [ "$(jq -r .exists "$STATE_FILE")" = false ]; then
             gh release create "$RELEASE_TAG" --repo "$REPOSITORY" \
               --target "$COMMIT" --verify-tag --draft --latest=false \
-              --title "$RELEASE_TAG" --notes "Exact tagged artifact; npm verification pending."
+              --title "$RELEASE_TAG" --generate-notes \
+              --notes "Exact tarball and commit record attached; npm/asset identity is verified before public release."
             probe
           fi
           for file in "$ARTIFACT" "$RECORD"; do
@@ -176,5 +177,5 @@ jobs:
           done
           if [ "$(jq -r .draft "$STATE_FILE")" = true ] || [ "$MAKE_LATEST" = true ]; then
             gh release edit "$RELEASE_TAG" --repo "$REPOSITORY" \
-              --draft=false --latest="$MAKE_LATEST" --notes "npm identity and exact artifact bytes verified. See release-record.json for tag commit and SHA512."
+              --draft=false --latest="$MAKE_LATEST"
           fi
