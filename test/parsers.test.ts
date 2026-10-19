@@ -40,6 +40,7 @@ test("DeepSeek parses monetary balances without quota windows", () => {
 		}),
 		{
 			windows: [],
+			incomplete: true,
 			balance: {
 				available: true,
 				amounts: [
@@ -246,7 +247,7 @@ test("Kimi derives usage from remaining when used is missing", () => {
 test("Kimi skips rows without quota numbers and tolerates empty payloads", () => {
 	assert.deepEqual(
 		parseKimi({ limits: [{ window: { duration: 300 } }], usage: {} }),
-		{ windows: [] },
+		{ windows: [], incomplete: true },
 	);
 	assert.deepEqual(parseKimi({}), { windows: [] });
 	assert.deepEqual(parseKimi(undefined), { windows: [] });

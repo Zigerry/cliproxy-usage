@@ -1,0 +1,23 @@
+# Supported-field completeness (#28)
+
+Release-audit fix implemented and locally verified, stacked on configuration-diagnostics PR #33; no main merge/version/tag/publication. Preserve valid subset values, never infer absent optional windows. Add one optional `incomplete: true` read/state/snapshot fact (false represented by absence) for quota/balance payloads only. No new parallel cache or generic validation framework.
+
+## Parsing contract
+
+Use the existing supported schemas/fixtures: Claude seven_day/five_hour utilization; Codex primary/secondary used_percent; DeepSeek balance_infos currency+total_balance; Kimi usage and limits quota ratios; Grok supported weekly creditUsagePercent. A non-null supported window/entry explicitly supplied but unusable marks incomplete. Missing/undefined/null optional containers are absence, not incomplete by themselves. Missing optional windows/currencies are never invented or required. Do not mark invalid/missing duration/reset alone incomplete: existing neutral labels and unknown reset semantics remain.
+
+Usable quota means finite nonnegative consumption (over-100 is allowed and rendered as exhausted); usable balance permits finite zero/negative values with nonempty currency. Preserve all valid siblings, numeric strings and safe legacy fallbacks. For mixed entries, avoid labeling the whole payload a transient request error. Keep established read-layer malformed-root/container safeguards; a DeepSeek array containing malformed entries retains usable sibling currencies and marks incomplete. If a nonempty array contains non-object entries and has no usable currencies, keep invalid-response (existing malformed-shape behavior). A structurally object-only nonempty array with no usable amounts is unknown+incomplete, distinct from normal empty-array unknown. Missing balance_infos is unknown; an explicitly null/non-array balance_infos remains invalid-response under its existing nonnullable collection contract. Test all cases explicitly.
+
+Empty/missing quota remains unknown, not full capacity. Codex header-only fallback remains valid when no malformed body slot is present; malformed supplied body slot may conservatively keep incomplete even if header gives one usable quota. Unknown duration/timeUnit is not an incomplete quota by itself. Grok unknown period remains unsupported/unknown, not a guessed weekly window.
+
+## State and UI
+
+Propagate incomplete through read results, detached state clones and snapshots, including within retained valid data (not merely the latest outcome flag). Historical subset data must retain its partial warning on failure fallback; a latest unknown response still hides old numbers. Valid subset updates that account's actual valid-data time, but no incomplete account can advance provider lastCompleteSuccessAt. Provider snapshot partial is true when any displayed latest account outcome is incomplete, including a provider with only one account. Add an explicit shared `partial data` account annotation; do not hide values or substitute historical complete data. Existing result valid/unknown/error and HTTP failures remain independent. Discovery errors, cached history and cloning cannot accidentally drop the fact or claim completeness. A later complete valid read clears incomplete. Successful partial data does not trigger network backoff.
+
+## Red-first matrix
+
+Every supported parser: valid-only; missing/null optional sibling (no incomplete); valid + explicitly malformed supported quota/currency (incomplete, valid sibling retained); zero and invalid negative quota; overflow; valid unknown duration/reset remains neutral; all unknown remains unknown. Read-level DeepSeek guard and Codex headers. State: partial single account prevents full-success time, valid-subset time advances, cloning remains detached, failure/history and recovery; widget/details/status agree. Controller integration verifies HTTP success with partial fields clears local network backoff without advancing complete-data success. Existing A-E tests must remain substantive.
+
+## Verification
+
+Initial isolated regressions failed 19/23 cases before implementation; expanded focused coverage passes 28/28. On the stacked fix tree, locked SDK 0.80.10 and isolated 1.3.0 each pass 336 full tests, types and pack checks. The warning is stored with retained valid data, copied without mutable references, shown by shared views after cached failures, hidden with old numbers for latest unknown, and cleared by complete recovery. HTTP success/backoff reset remains independent of complete quota-data success. No live provider or personal configuration was used; integrated release validation and remote CI are separate checks.

@@ -9,6 +9,11 @@ export function toNumber(value: unknown): number | undefined {
 	return undefined;
 }
 
+function quotaNumber(value: unknown): number | undefined {
+	const parsed = toNumber(value);
+	return parsed !== undefined && parsed >= 0 ? parsed : undefined;
+}
+
 function positiveNumber(value: unknown): number | undefined {
 	const parsed = toNumber(value);
 	return parsed !== undefined && parsed > 0 ? parsed : undefined;
@@ -50,54 +55,49 @@ function sortedWindows(candidates: Array<UsageWindow | undefined>): UsageWindow[
 
 function windows(
 	...candidates: Array<UsageWindow | undefined>
-): Pick<AccountUsage, "windows"> {
+): Pick<AccountUsage, "windows" | "incomplete"> {
 	return { windows: sortedWindows(candidates) };
 }
 
-export function parseClaude(body: unknown): Pick<AccountUsage, "windows"> {
-	const root = body as Record<string, unknown>;
-	const window = (
-		value: unknown,
-		label: string,
-	): UsageWindow | undefined => {
-		const item = value as Record<string, unknown> | undefined;
-		const used = toNumber(item?.utilization);
-		return used === undefined
-			? undefined
-			: { label, used, resetsAt: toDate(item?.resets_at) };
+export function parseClaude(body: unknown): Pick<AccountUsage, "windows" | "incomplete"> {
+	const root = record(body);
+	let incomplete = false;
+	const window = (value: unknown, label: string): UsageWindow | undefined => {
+		if (value === undefined || value === null) return undefined;
+		const item = record(value);
+		const used = quotaNumber(item?.utilization);
+		if (used === undefined) { incomplete = true; return undefined; }
+		return { label, used, resetsAt: toDate(item?.resets_at) };
 	};
-	return windows(
-		window(root?.seven_day, "7d"),
-		window(root?.five_hour, "5h"),
-	);
+	const parsed = windows(window(root?.seven_day, "7d"), window(root?.five_hour, "5h"));
+	return { ...parsed, ...(incomplete ? { incomplete: true } : {}) };
 }
 
 export function parseDeepSeek(
 	body: unknown,
-): Pick<AccountUsage, "windows" | "balance"> {
-	const root = body as Record<string, unknown> | undefined;
+): Pick<AccountUsage, "windows" | "balance" | "incomplete"> {
+	const root = record(body);
 	const infos = Array.isArray(root?.balance_infos) ? root.balance_infos : [];
+	let incomplete = root?.balance_infos !== undefined && !Array.isArray(root.balance_infos);
 	const amounts = infos.flatMap((value) => {
-		const item = value as Record<string, unknown> | undefined;
+		const item = record(value);
 		const amount = toNumber(item?.total_balance);
-		const currency =
-			typeof item?.currency === "string" ? item.currency.trim().toUpperCase() : "";
-		return amount === undefined || !currency ? [] : [{ currency, amount }];
+		const currency = typeof item?.currency === "string" ? item.currency.trim().toUpperCase() : "";
+		if (amount === undefined || !currency) { incomplete = true; return []; }
+		return [{ currency, amount }];
 	});
 	return {
 		windows: [],
-		balance: {
-			available: root?.is_available !== false,
-			amounts,
-		},
+		balance: { available: root?.is_available !== false, amounts },
+		...(incomplete ? { incomplete: true } : {}),
 	};
 }
 
 function codexWindow(
 	value: unknown,
 ): (UsageWindow & { seconds?: number }) | undefined {
-	const item = value as Record<string, unknown> | undefined;
-	const used = toNumber(item?.used_percent);
+	const item = record(value);
+	const used = quotaNumber(item?.used_percent);
 	if (used === undefined) return undefined;
 	const resetAfter = toNumber(item?.reset_after_seconds);
 	return {
@@ -117,47 +117,37 @@ function codexLabel(window: UsageWindow & { seconds?: number }): string {
 	return window.seconds === undefined ? "limit" : durationLabel(window.seconds);
 }
 
-export function parseCodex(body: unknown): Pick<AccountUsage, "windows"> {
-	const rate = (body as Record<string, unknown>)?.rate_limit as
-		| Record<string, unknown>
-		| undefined;
-	const parsed = [
-		codexWindow(rate?.primary_window),
-		codexWindow(rate?.secondary_window),
-	].filter(Boolean) as Array<UsageWindow & { seconds?: number }>;
-	const labeled = parsed.map((window) => ({
-		label: codexLabel(window),
-		used: window.used,
-		resetsAt: window.resetsAt,
-	}));
-	return { windows: sortedWindows(labeled) };
+export function parseCodex(body: unknown): Pick<AccountUsage, "windows" | "incomplete"> {
+	const value = record(body)?.rate_limit;
+	const rate = record(value);
+	let incomplete = value !== undefined && value !== null && !rate;
+	const parsed = [rate?.primary_window, rate?.secondary_window].flatMap((value) => {
+		if (value === undefined || value === null) return [];
+		const window = codexWindow(value);
+		if (!window) { incomplete = true; return []; }
+		return [{ label: codexLabel(window), used: window.used, resetsAt: window.resetsAt }];
+	});
+	return { windows: sortedWindows(parsed), ...(incomplete ? { incomplete: true } : {}) };
 }
 
-export function parseGrok(body: unknown): Pick<AccountUsage, "windows"> {
-	const config = (body as Record<string, unknown>)?.config as
-		| Record<string, unknown>
-		| undefined;
-	const period = config?.currentPeriod as Record<string, unknown> | undefined;
-	const used = toNumber(config?.creditUsagePercent);
-	if (period?.type !== "USAGE_PERIOD_TYPE_WEEKLY" || used === undefined) {
-		return { windows: [] };
-	}
-	return windows({
-		label: "7d",
-		used,
-		resetsAt: toDate(period.end),
-	});
+export function parseGrok(body: unknown): Pick<AccountUsage, "windows" | "incomplete"> {
+	const config = record(record(body)?.config);
+	const period = record(config?.currentPeriod);
+	if (period?.type !== "USAGE_PERIOD_TYPE_WEEKLY") return { windows: [] };
+	const used = quotaNumber(config?.creditUsagePercent);
+	if (used === undefined) return { windows: [], incomplete: true };
+	return windows({ label: "7d", used, resetsAt: toDate(period.end) });
 }
 
 function kimiPercent(detail: Record<string, unknown>): number | undefined {
 	const limit = toNumber(detail.limit);
 	const used = toNumber(detail.used);
 	if (used !== undefined && limit !== undefined && limit > 0) {
-		return toNumber((used / limit) * 100);
+		return used < 0 ? undefined : quotaNumber((used / limit) * 100);
 	}
 	const remaining = toNumber(detail.remaining);
 	if (remaining !== undefined && limit !== undefined && limit > 0) {
-		return toNumber(((limit - remaining) / limit) * 100);
+		return quotaNumber(((limit - remaining) / limit) * 100);
 	}
 	return undefined;
 }
@@ -188,33 +178,28 @@ function kimiWindowSeconds(value: unknown): number | undefined {
 	}
 }
 
-export function parseKimi(body: unknown): Pick<AccountUsage, "windows"> {
+export function parseKimi(body: unknown): Pick<AccountUsage, "windows" | "incomplete"> {
 	const root = record(body);
 	const result: UsageWindow[] = [];
+	let incomplete = root?.limits !== undefined && root.limits !== null && !Array.isArray(root.limits);
 	const limits = Array.isArray(root?.limits) ? root.limits : [];
 	for (const entry of limits) {
 		const item = record(entry);
-		if (!item) continue;
+		if (!item) { incomplete = true; continue; }
 		const detail = record(item.detail) ?? item;
 		const used = kimiPercent(detail);
-		if (used === undefined) continue;
-		const seconds = kimiWindowSeconds(item?.window);
+		if (used === undefined) { incomplete = true; continue; }
+		const seconds = kimiWindowSeconds(item.window);
 		result.push({
-			label: seconds === undefined ? "Limit" : durationLabel(seconds),
-			used,
+			label: seconds === undefined ? "Limit" : durationLabel(seconds), used,
 			resetsAt: toDate(detail.resetTime ?? detail.reset_at),
 		});
 	}
-	const plan = record(root?.usage);
-	if (plan) {
-		const used = kimiPercent(plan);
-		if (used !== undefined) {
-			result.push({
-				label: "7d",
-				used,
-				resetsAt: toDate(plan.resetTime ?? plan.reset_at),
-			});
-		}
+	if (root?.usage !== undefined && root.usage !== null) {
+		const plan = record(root.usage);
+		const used = plan ? kimiPercent(plan) : undefined;
+		if (used === undefined) incomplete = true;
+		else result.push({ label: "7d", used, resetsAt: toDate(plan?.resetTime ?? plan?.reset_at) });
 	}
-	return { windows: sortedWindows(result) };
+	return { windows: sortedWindows(result), ...(incomplete ? { incomplete: true } : {}) };
 }

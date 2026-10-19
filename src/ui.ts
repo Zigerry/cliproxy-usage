@@ -253,6 +253,7 @@ export function formatUsageAge(at: number | undefined, now: number): string {
 /** Snapshot facts shared by details and non-TUI/status output. No cache inference. */
 export function formatAccountSnapshotMetadata(item: AccountUsageSnapshot, now: number): string[] {
 	const facts: string[] = [];
+	if (item.incomplete) facts.push("partial data");
 	if (item.lastValidAt !== undefined) {
 		facts.push(`${item.result === "unknown" ? "last valid " : ""}data age: ${formatUsageAge(item.lastValidAt, now)}`);
 	}
@@ -378,6 +379,7 @@ export function renderUsage(
 							: item.windows.length ? layoutQuotaWindows(item.windows, budget, paintTheme, size)
 							: [paint("dim", budget >= 7 ? (item.result === "error" ? "error" : "unknown") : omitted(item.result === "error" ? "error" : "unknown", budget))];
 						const annotations = [
+							...(item.incomplete ? ["partial data"] : []),
 							...(item.cached ? ["cached"] : []), ...(item.stale ? ["stale"] : []),
 							...(item.error ? [`error: ${item.error}`] : item.result === "error" ? ["error"] : []),
 						].join(" · ");
@@ -396,7 +398,7 @@ export function renderUsage(
 						const indent = width >= 4 ? "  " : "";
 						const bodyWidth = width - visibleWidth(indent);
 						return [identity(width), ...data(bodyWidth).map((line) => indent + line),
-							...[[item.cached ? "cached" : "", item.stale ? "stale" : ""].filter(Boolean).join(" · "),
+							...[[item.incomplete ? "partial data" : "", item.cached ? "cached" : "", item.stale ? "stale" : ""].filter(Boolean).join(" · "),
 								item.error ? `error: ${item.error}` : item.result === "error" ? "error" : ""]
 								.filter(Boolean).flatMap((text) => layoutProse(paint(item.error ? "error" : "dim", text), bodyWidth))
 								.map((line) => indent + line)];

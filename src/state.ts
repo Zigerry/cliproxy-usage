@@ -53,6 +53,7 @@ function cloneData(data: UsageData, redactions: readonly string[]): UsageData {
 	}));
 	return {
 		windows,
+		...(data.incomplete ? { incomplete: true } : {}),
 		...(data.balance && amounts?.length ? { balance: { available: data.balance.available, amounts } } : {}),
 	};
 }
@@ -69,6 +70,7 @@ function cloneAccount(account: AccountUsageState, redactions: readonly string[])
 		queried: account.queried,
 		attemptedAt: account.attemptedAt,
 		result: account.result,
+		...(account.incomplete ? { incomplete: true } : {}),
 		...(account.error !== undefined ? { error: safeUsageText(account.error, redactions) } : {}),
 		...(account.valid ? { valid: { at: account.valid.at, data: cloneData(account.valid.data, redactions) } } : {}),
 	};
@@ -126,13 +128,14 @@ export function applyProviderRead(previous: ProviderUsageState | undefined, resu
 			queried: item.queried === true,
 			attemptedAt: item.queried === true ? timing.attemptedAt : old?.attemptedAt,
 			result: outcome,
+			...(data.incomplete ? { incomplete: true } : {}),
 			...(outcome === "error" ? { error: safeUsageText(item.error!, redactions) } : {}),
 			...(outcome === "valid" ? { valid: { at: timing.completedAt, data } }
 				: old?.valid ? { valid: { at: old.valid.at, data: cloneData(old.valid.data, redactions) } } : {}),
 		};
 	});
 	record.discovery = { result: "success", at: timing.completedAt };
-	if (record.accounts.every((account) => account.result === "valid")) {
+	if (record.accounts.every((account) => account.result === "valid" && !account.incomplete)) {
 		record.lastCompleteSuccessAt = timing.completedAt;
 	}
 	return record;
@@ -182,6 +185,7 @@ export function deriveUsageSnapshot(input: {
 			provider: account.provider, accountId: safeId(account.accountId, []),
 			label: safeUsageText(account.label),
 			...data,
+			...(account.incomplete || data.incomplete ? { incomplete: true } : {}),
 			queried: account.queried, attemptedAt: account.attemptedAt, lastValidAt: account.valid?.at,
 			result: account.result,
 			...(account.error !== undefined ? { error: safeUsageText(account.error) } : {}),
@@ -204,6 +208,7 @@ export function deriveUsageSnapshot(input: {
 		state = "error";
 		partial = errorCount < accounts.length;
 	} else state = "unknown";
+	partial ||= accounts.some((account) => account.incomplete);
 
 	const error = setup ? configuration.message
 		: discoveryError ? record?.discovery?.error

@@ -58,6 +58,8 @@ export type RefreshEligibility = {
 };
 
 export type AccountUsage = {
+	/** A supplied supported quota/balance field was unusable; valid siblings remain usable. */
+	incomplete?: true;
 	provider: ProviderName;
 	/** Opaque Management auth_index; never a display label or credential. */
 	accountId?: string;
@@ -82,11 +84,14 @@ export type ReadAccountsResult = {
 };
 
 export type UsageData = {
+	/** Retained subset data keeps its warning on later failure fallback. */
+	incomplete?: true;
 	windows: UsageWindow[];
 	balance?: AccountBalance;
 };
 
 export type AccountUsageState = {
+	incomplete?: true;
 	provider: ProviderName;
 	accountId?: string;
 	label: string;
@@ -117,6 +122,7 @@ export type ReadonlyAccountBalance = {
 };
 
 export type AccountUsageSnapshot = {
+	readonly incomplete?: true;
 	readonly provider: ProviderName;
 	readonly accountId?: string;
 	readonly label: string;

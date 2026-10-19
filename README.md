@@ -127,7 +127,7 @@ Outside TUI mode, no interactive view is opened; UI-capable modes fall back to a
 
 ### Cache freshness
 
-Widget, details, and status use the same account-level snapshot. Failed reads can show the last valid value marked `cached`/`stale`; a successful response without usable values shows `unknown`, never the old number or an assumed 100% remaining. A genuine zero quota or zero balance stays visible.
+Widget, details, and status use the same account-level snapshot. Failed reads can show the last valid value marked `cached`/`stale`; a successful response without usable values shows `unknown`, never the old number or an assumed 100% remaining. A genuine zero quota or zero balance stays visible. If a supplied supported quota window or balance entry is unusable, valid siblings remain visible with `partial data`; absent optional windows are not inferred. These subset values get a new data age but do not advance the last complete success. Their warning survives cached failure fallback and clears after a complete response.
 
 Data becomes stale when it reaches the configured refresh age, a reported reset is due, or a refresh failure applies. Local expiry only redraws the display: it neither queries the provider nor replenishes quota. Bar colors still represent remaining quota, not freshness.
 

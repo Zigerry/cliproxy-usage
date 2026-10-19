@@ -194,26 +194,28 @@ function remoteLabel(auth: RemoteAuthFile): string {
 function parseUsageResponse(
 	provider: ProviderName,
 	response: UsageResponse,
-): Pick<AccountUsage, "windows" | "balance"> {
+): Pick<AccountUsage, "windows" | "balance" | "incomplete"> {
 	if (provider === "claude") return parseClaude(response.body);
 	if (provider === "codex") {
 		const parsed = parseCodex(response.body);
 		if (!parsed.windows.length) {
-			const used = toNumber(
-				response.headers.get("x-codex-primary-used-percent"),
-			);
-			if (used !== undefined) parsed.windows.push({ label: "limit", used });
+			const header = response.headers.get("x-codex-primary-used-percent");
+			const used = toNumber(header);
+			if (used !== undefined && used >= 0) parsed.windows.push({ label: "limit", used });
+			else if (header !== null) parsed.incomplete = true;
 		}
 		return parsed;
 	}
 	if (provider === "deepseek") {
 		if (!record(response.body) ||
 			(response.body.is_available !== undefined && typeof response.body.is_available !== "boolean") ||
-			(response.body.balance_infos !== undefined && (!Array.isArray(response.body.balance_infos) ||
-				!response.body.balance_infos.every(record)))) {
+			(response.body.balance_infos !== undefined && !Array.isArray(response.body.balance_infos))) {
 			throw new Error("invalid balance response");
 		}
-		return parseDeepSeek(response.body);
+		const parsed = parseDeepSeek(response.body);
+		if (Array.isArray(response.body.balance_infos) && response.body.balance_infos.some((entry) => !record(entry)) &&
+			!parsed.balance?.amounts.length) throw new Error("invalid balance response");
+		return parsed;
 	}
 	if (provider === "kimi") return parseKimi(response.body);
 	return parseGrok(response.body);
@@ -512,7 +514,7 @@ async function fetchRemoteUsage(
 		queried = true;
 		const response = await remoteUsageRequest(baseUrl, managementKey, auth, provider, signal, report);
 		signal?.throwIfAborted();
-		let parsed: Pick<AccountUsage, "windows" | "balance">;
+		let parsed: Pick<AccountUsage, "windows" | "balance" | "incomplete">;
 		try { parsed = parseUsageResponse(provider, response); }
 		catch { throw invalidResponse("provider", "invalid provider response"); }
 		const id = accountId(auth.auth_index);
