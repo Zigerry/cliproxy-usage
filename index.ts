@@ -5,7 +5,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 import { UsageController } from "./src/controller.js";
-import { PROVIDERS, PROVIDER_LABELS } from "./src/providers.js";
 import { loadSettings, saveSettings } from "./src/settings.js";
 import { promptManagementKey, showSettings } from "./src/settings-ui.js";
 import {
@@ -111,44 +110,6 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.notify("CLIProxyAPI management password cleared.", "info");
 	};
 
-	const showStatus = async (ctx: ExtensionCommandContext) => {
-		const loaded = await loadSettings(SETTINGS_PATH, LEGACY_SETTINGS_PATH);
-		usage.syncSettings(loaded.settings, ctx);
-		const providers = PROVIDERS.filter(
-			(provider) => loaded.settings.providers[provider],
-		)
-			.map((provider) => PROVIDER_LABELS[provider])
-			.join(", ");
-		const source = await resolveManagementSource(
-			loaded.settings,
-			PROVIDER_CONFIG_PATH,
-		);
-		const currentProvider = ctx.model
-			? providerForModel(ctx.model.provider, ctx.model.id)
-			: undefined;
-		const refreshedAt = usage.lastRefresh(currentProvider)?.toISOString();
-		ctx.ui.notify(
-			[
-				`Settings: ${loaded.path}`,
-				`Provider config: ${PROVIDER_CONFIG_PATH}`,
-				`Provider base URL: ${source.providerBaseUrl || "not found"}`,
-				`Management URL: ${source.managementUrl || source.error || "not found"}`,
-				`Management key: ${source.managementKeyConfigured ? "configured" : "missing"}`,
-				`Current model: ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "not selected"}`,
-				`Current usage provider: ${currentProvider ? PROVIDER_LABELS[currentProvider] : "unsupported"}`,
-				`Last refresh: ${refreshedAt || "not yet"}`,
-				`Refresh: ${loaded.settings.refreshMinutes} min`,
-				`Visible accounts: ${loaded.settings.maxVisibleAccounts}`,
-				`Providers: ${providers || "none"}`,
-				`Settings source: ${Object.keys(loaded.raw).length ? "settings file" : "defaults"}`,
-				...(loaded.warnings.length
-					? [`Warnings: ${loaded.warnings.join("; ")}`]
-					: []),
-			].join("\n"),
-			loaded.warnings.length || source.error ? "warning" : "info",
-		);
-	};
-
 	pi.on("session_start", async (_event, ctx) => {
 		const loaded = await loadSettings(SETTINGS_PATH, LEGACY_SETTINGS_PATH);
 		usage.start(ctx, loaded);
@@ -194,7 +155,7 @@ export default function (pi: ExtensionAPI) {
 						usage.applySettings(ctx, settings, changedId),
 				);
 			}
-			if (action === "status") return showStatus(ctx);
+			if (action === "status") return usage.showStatus(ctx);
 			ctx.ui.notify(
 				`Usage: /cliproxy-usage [${commandItems.map((command) => command.value).join("|")}]`,
 				"warning",

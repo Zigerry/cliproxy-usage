@@ -12,13 +12,14 @@ import {
 	loadSettings,
 } from "./settings.js";
 import {
-	accountsForModel,
 	providerForModel,
 	readAccounts,
 	resolveManagementSource,
+	type ManagementSource,
 } from "./usage.js";
-import { clearUsage, formatDetails, renderUsage } from "./ui.js";
-import type { AccountUsage, ProviderName, Settings } from "./types.js";
+import { applyProviderRead, beginProviderRead, deriveUsageSnapshot, nextFreshnessDeadline, safeUsageText } from "./state.js";
+import { clearUsage, formatSnapshotDetails, renderUsage } from "./ui.js";
+import type { ProviderName, ProviderUsageState, Settings, UsageConfiguration, UsageSnapshot } from "./types.js";
 
 type RefreshRequest = {
 	readonly generation: number;
@@ -47,19 +48,19 @@ function uniqueProviders(...groups: ProviderName[][]): ProviderName[] {
 
 export class UsageController {
 	private timer: ReturnType<typeof setInterval> | undefined;
-	private latestItems: AccountUsage[] = [];
-	private fetchedProviders = new Set<ProviderName>();
-	private lastUpdated = new Map<ProviderName, Date>();
-	private lastRefreshErrors = new Map<ProviderName, string>();
+	private readonly providerStates = new Map<ProviderName, ProviderUsageState>();
+	private settingsKnown = false;
+	private ageTimer: ReturnType<typeof setTimeout> | undefined;
+	private ageOwner: { ctx: ExtensionContext; generation: number } | undefined;
+	private readonly detailsViews = new Set<{ provider: ProviderName; close: () => void }>();
 	private readonly refreshRequests = new Set<RefreshRequest>();
 	private generation = 0;
 	private operation: RefreshOperation | undefined;
-	private sourceBoundary: { url: string | undefined; key: string } | undefined;
+	private sourceBoundary: { source: ManagementSource; key: string } | undefined;
 	private readonly changeListeners = new Set<() => void>();
 	private maxVisibleAccounts = DEFAULT_SETTINGS.maxVisibleAccounts;
 	private settingsSnapshot: Settings = structuredClone(DEFAULT_SETTINGS);
 	private rejectedManagementKey: string | undefined;
-	private rejectedManagementError: string | undefined;
 	private lastSettingsWarning: string | undefined;
 	private active = true;
 	private readonly refreshQueue: CoalescingAsyncQueue<RefreshRequest>;
@@ -87,19 +88,61 @@ export class UsageController {
 			: undefined;
 	}
 
-	private itemsForProvider(provider?: ProviderName): AccountUsage[] {
-		return provider
-			? this.latestItems.filter((item) => item.provider === provider)
-			: [];
+	private configuration(): UsageConfiguration {
+		if (!this.settingsKnown) return { status: "pending" };
+		if (!this.settingsSnapshot.managementKey) return { status: "setup-required", reason: "missing-key" };
+		if (!this.sourceBoundary) return { status: "pending" };
+		if (this.sourceBoundary.source.error) return { status: "setup-required", reason: "invalid-source" };
+		if (!this.sourceBoundary.source.managementUrl) return { status: "setup-required", reason: "missing-url" };
+		if (this.rejectedManagementKey === this.settingsSnapshot.managementKey) return { status: "setup-required", reason: "rejected" };
+		return { status: "ready" };
 	}
 
-	private itemsForCurrentModel(ctx: ExtensionContext): AccountUsage[] {
-		if (!ctx.model) return [];
-		return accountsForModel(
-			this.latestItems,
-			ctx.model.provider,
-			ctx.model.id,
-		);
+	private snapshotForProvider(provider?: ProviderName, now = Date.now()): UsageSnapshot {
+		return deriveUsageSnapshot({
+			provider,
+			enabled: Boolean(provider && this.settingsSnapshot.providers[provider]),
+			configuration: this.configuration(),
+			record: provider ? this.providerStates.get(provider) : undefined,
+			refreshing: Boolean(provider && this.providerIsRefreshing(provider)),
+			now,
+			maxAgeMs: this.settingsSnapshot.refreshMinutes * 60_000,
+		});
+	}
+
+	getSnapshot(ctx: ExtensionContext, now = Date.now()): UsageSnapshot {
+		return this.snapshotForProvider(this.active ? this.providerForContext(ctx) : undefined, now);
+	}
+
+	private closeDetails(keepProvider?: ProviderName): void {
+		for (const view of [...this.detailsViews]) {
+			if (!keepProvider || view.provider !== keepProvider) view.close();
+		}
+	}
+
+	private clearAgeTimer(): void {
+		if (this.ageTimer) clearTimeout(this.ageTimer);
+		this.ageTimer = undefined;
+		this.ageOwner = undefined;
+	}
+
+	private scheduleExpiry(ctx: ExtensionContext, snapshot: UsageSnapshot): void {
+		this.clearAgeTimer();
+		if (!this.active || ctx.mode !== "tui" || !snapshot.provider ||
+			["unsupported", "disabled", "setup-required"].includes(snapshot.state)) return;
+		const now = snapshot.generatedAt;
+		const deadline = nextFreshnessDeadline(this.providerStates.get(snapshot.provider), now,
+			this.settingsSnapshot.refreshMinutes * 60_000);
+		if (deadline === undefined || !Number.isFinite(deadline) || deadline <= now) return;
+		const owner = { ctx, generation: this.generation };
+		this.ageOwner = owner;
+		this.ageTimer = setTimeout(() => {
+			if (!this.active || owner.generation !== this.generation || this.ageOwner !== owner) return;
+			this.ageTimer = undefined;
+			this.renderCurrentModel(owner.ctx);
+			this.emitChange();
+		}, Math.max(1, Math.min(deadline - Date.now(), 2_147_483_647)));
+		this.ageTimer.unref?.();
 	}
 
 	private providerIsRefreshing(provider: ProviderName): boolean {
@@ -115,6 +158,8 @@ export class UsageController {
 	}
 
 	private invalidateWork(ctx?: ExtensionContext): void {
+		this.closeDetails();
+		this.clearAgeTimer();
 		this.generation++;
 		this.refreshQueue.cancelPending();
 		this.refreshRequests.clear();
@@ -131,12 +176,11 @@ export class UsageController {
 	}
 
 	private providerIsStale(provider: ProviderName): boolean {
-		if (!this.fetchedProviders.has(provider)) return true;
-		const updatedAt = this.lastUpdated.get(provider)?.getTime() ?? 0;
-		return (
-			Date.now() - updatedAt >=
-			this.settingsSnapshot.refreshMinutes * 60_000
-		);
+		const state = this.providerStates.get(provider);
+		if (!state?.discovery) return true;
+		const snapshot = this.snapshotForProvider(provider);
+		return snapshot.stale || snapshot.partial || snapshot.state === "unknown" || snapshot.state === "error" ||
+			Date.now() - state.discovery.at >= this.settingsSnapshot.refreshMinutes * 60_000;
 	}
 
 	private emitChange(): void {
@@ -148,46 +192,17 @@ export class UsageController {
 		return () => this.changeListeners.delete(listener);
 	}
 
-	private replaceProviderItems(
-		provider: ProviderName,
-		items: AccountUsage[],
-	): void {
-		this.latestItems = this.latestItems.filter(
-			(item) => item.provider !== provider,
-		);
-		this.latestItems.push(...items);
+	private recordProviderFailure(provider: ProviderName, message: string): void {
+		const now = Date.now();
+		this.providerStates.set(provider, applyProviderRead(this.providerStates.get(provider),
+			{ provider, discovery: "failure", error: message },
+			{ attemptedAt: now, completedAt: now }, [this.settingsSnapshot.managementKey]));
 	}
 
-	private mergeFailedAccountItems(
-		provider: ProviderName,
-		items: AccountUsage[],
-	): AccountUsage[] {
-		const cachedById = new Map<string, AccountUsage>();
-		for (const item of this.itemsForProvider(provider)) {
-			if (item.error || !item.accountId || (!item.windows.length && !item.balance)) continue;
-			cachedById.set(item.accountId, item);
-		}
-		return items.map((item) => {
-			if (!item.error || !item.accountId) return item;
-			const cached = cachedById.get(item.accountId);
-			return cached ? { ...cached, label: item.label } : item;
-		});
-	}
-
-	private recordProviderFailure(
-		provider: ProviderName,
-		message: string,
-		items: AccountUsage[] = [],
-	): void {
-		this.lastRefreshErrors.set(provider, message);
-		if (!this.fetchedProviders.has(provider)) {
-			this.replaceProviderItems(
-				provider,
-				items.length
-					? items
-					: [{ provider, label: "remote", windows: [], error: message }],
-			);
-		}
+	private publish(ctx: ExtensionContext): void {
+		if (!this.active) return;
+		this.renderCurrentModel(ctx);
+		this.emitChange();
 	}
 
 	private requestRefresh(input: Omit<RefreshRequest, "generation">): Promise<void> {
@@ -198,42 +213,36 @@ export class UsageController {
 			loaded: input.loaded ? { ...input.loaded, settings: structuredClone(input.loaded.settings) } : undefined,
 		};
 		this.refreshRequests.add(request);
-		this.emitChange();
+		this.publish(request.ctx);
 		return this.refreshQueue.request(request).finally(() => {
 			this.refreshRequests.delete(request);
-			if (this.active && request.generation === this.generation) this.emitChange();
+			if (this.active && request.generation === this.generation) this.publish(request.ctx);
 		});
 	}
 
 	renderCurrentModel(ctx: ExtensionContext): void {
-		renderUsage(
-			ctx,
-			this.itemsForCurrentModel(ctx),
-			this.maxVisibleAccounts,
-		);
+		if (!this.active) return;
+		const snapshot = this.getSnapshot(ctx);
+		renderUsage(ctx, snapshot, this.maxVisibleAccounts);
+		this.scheduleExpiry(ctx, snapshot);
 	}
 
 	private clearProviderCache(provider: ProviderName): void {
-		this.latestItems = this.latestItems.filter(
-			(item) => item.provider !== provider,
-		);
-		this.fetchedProviders.delete(provider);
-		this.lastUpdated.delete(provider);
-		this.lastRefreshErrors.delete(provider);
+		this.providerStates.delete(provider);
 	}
 
 	private clearAllCaches(): void {
-		this.latestItems = [];
-		this.fetchedProviders = new Set<ProviderName>();
-		this.lastUpdated = new Map<ProviderName, Date>();
-		this.lastRefreshErrors = new Map<ProviderName, string>();
+		this.providerStates.clear();
+		this.clearAgeTimer();
 	}
 
 	private notifySettingsWarnings(
 		ctx: ExtensionContext,
 		loaded: LoadedSettings,
 	): void {
-		const warning = loaded.warnings.join("; ");
+		const warning = loaded.writable
+			? safeUsageText(loaded.warnings.join("; "), [loaded.settings.managementKey])
+			: "Invalid CLIProxyAPI usage settings; correct the configuration file.";
 		if (!warning) {
 			this.lastSettingsWarning = undefined;
 			return;
@@ -250,44 +259,11 @@ export class UsageController {
 			: "the current model";
 	}
 
-	private notifyProviderState(
-		ctx: ExtensionContext,
-		provider: ProviderName,
-	): void {
-		const label = PROVIDER_LABELS[provider];
-		if (!this.settingsSnapshot.providers[provider]) {
-			ctx.ui.notify(
-				`${label} usage is disabled. Enable it in /cliproxy-usage settings.`,
-				"warning",
-			);
-			return;
-		}
-		const items = this.itemsForProvider(provider);
-		const refreshError = this.lastRefreshErrors.get(provider);
-		if (refreshError) {
-			ctx.ui.notify(
-				items.length && this.fetchedProviders.has(provider)
-					? `${formatDetails(items)}\nRefresh failed: ${refreshError}`
-					: `Failed to refresh ${label} usage: ${refreshError}`,
-				"warning",
-			);
-			return;
-		}
-		if (!this.fetchedProviders.has(provider)) {
-			ctx.ui.notify(
-				`No cached ${label} usage. Run /cliproxy-usage to refresh.`,
-				"info",
-			);
-			return;
-		}
-		if (!items.length) {
-			ctx.ui.notify(`No ${label} CLIProxyAPI accounts found.`, "info");
-			return;
-		}
-		ctx.ui.notify(
-			formatDetails(items),
-			items.some((item) => item.error) ? "warning" : "info",
-		);
+	private notifyProviderState(ctx: ExtensionContext, provider: ProviderName): void {
+		if (!ctx.hasUI || provider !== this.providerForContext(ctx)) return;
+		const snapshot = this.snapshotForProvider(provider);
+		ctx.ui.notify(formatSnapshotDetails(snapshot),
+			snapshot.stale || snapshot.partial || ["error", "setup-required", "disabled"].includes(snapshot.state) ? "warning" : "info");
 	}
 
 	private async runRefresh(request: RefreshRequest): Promise<void> {
@@ -302,7 +278,7 @@ export class UsageController {
 			await abortable(this.performRefresh(request, operation), operation.controller.signal);
 		} catch (error) {
 			if (!this.owns(operation)) return;
-			const message = error instanceof Error ? error.message : String(error);
+			const message = safeUsageText(error instanceof Error ? error.message : String(error), [this.settingsSnapshot.managementKey]);
 			for (const provider of operation.providers) this.recordProviderFailure(provider, message);
 			this.renderCurrentModel(request.ctx);
 			this.emitChange();
@@ -312,7 +288,7 @@ export class UsageController {
 			if (this.operation === operation) this.operation = undefined;
 			if (current) {
 				if (request.ctx.hasUI) request.ctx.ui.setStatus("cliproxy-usage", undefined);
-				this.emitChange();
+				this.publish(request.ctx);
 			}
 		}
 	}
@@ -324,7 +300,7 @@ export class UsageController {
 		if (!this.owns(operation)) return;
 
 		const boundaryChanged = this.sourceBoundary !== undefined && (
-			this.sourceBoundary.url !== source.managementUrl ||
+			this.sourceBoundary.source.managementUrl !== source.managementUrl ||
 			this.sourceBoundary.key !== loaded.settings.managementKey
 		);
 		// Boundary adoption is distinct from the immutable operation generation.
@@ -334,11 +310,12 @@ export class UsageController {
 			this.refreshRequests.clear();
 		}
 		if (boundaryChanged) {
+			this.closeDetails();
 			this.clearAllCaches();
 			this.rejectedManagementKey = undefined;
-			this.rejectedManagementError = undefined;
 		}
-		this.sourceBoundary = { url: source.managementUrl, key: loaded.settings.managementKey };
+		this.sourceBoundary = { source: structuredClone(source), key: loaded.settings.managementKey };
+		this.settingsKnown = true;
 		this.settingsSnapshot = structuredClone(loaded.settings);
 		this.maxVisibleAccounts = loaded.settings.maxVisibleAccounts;
 		this.notifySettingsWarnings(request.ctx, loaded);
@@ -346,46 +323,30 @@ export class UsageController {
 			if (!loaded.settings.providers[provider]) this.clearProviderCache(provider);
 		}
 		operation.providers = request.providers.filter((provider) => loaded.settings.providers[provider]);
-		if (!request.force && !request.notifyProviders.length && loaded.settings.managementKey &&
-			this.rejectedManagementKey === loaded.settings.managementKey) {
-			const message = this.rejectedManagementError || "management authentication failed; run /cliproxy-usage setup";
-			for (const provider of operation.providers) this.recordProviderFailure(provider, message);
-			this.renderCurrentModel(request.ctx);
-			this.emitChange();
+		const rejected = this.rejectedManagementKey === loaded.settings.managementKey;
+		const configuration = this.configuration();
+		const cannotRead = configuration.status === "setup-required" && configuration.reason !== "rejected";
+		if (!operation.providers.length || cannotRead || (rejected && !request.force && !request.notifyProviders.length)) {
+			this.publish(request.ctx);
+			for (const provider of request.notifyProviders) this.notifyProviderState(request.ctx, provider);
 			return;
 		}
 
-		if (request.ctx.hasUI && operation.providers.length) {
-			request.ctx.ui.setStatus("cliproxy-usage", request.ctx.ui.theme.fg("dim", "quota refreshing…"));
+		const attemptedAt = Date.now();
+		for (const provider of operation.providers) {
+			this.providerStates.set(provider, beginProviderRead(this.providerStates.get(provider), provider, attemptedAt));
 		}
-		const results = operation.providers.length
-			? await readAccounts(loaded.settings, { source, providers: operation.providers, signal: operation.controller.signal })
-			: { providers: [], managementAuthFailed: false };
+		this.publish(request.ctx);
+		if (request.ctx.hasUI) request.ctx.ui.setStatus("cliproxy-usage", request.ctx.ui.theme.fg("dim", "quota refreshing…"));
+		const results = await readAccounts(loaded.settings, { source, providers: operation.providers, signal: operation.controller.signal });
 		if (!this.owns(operation)) return;
+		const completedAt = Date.now();
 		for (const result of results.providers) {
-			const { provider } = result;
-			if (result.discovery === "failure") {
-				this.recordProviderFailure(provider, result.error);
-				continue;
-			}
-			const failed = result.items.filter((item) => item.error);
-			const allFailed = result.items.length > 0 && failed.length === result.items.length;
-			const failure = [...new Set(failed.map((item) => `${item.label}: ${item.error}`))].join("; ");
-			// Successful discovery is authoritative, even when every query failed.
-			this.replaceProviderItems(provider, this.mergeFailedAccountItems(provider, result.items));
-			if (!allFailed) {
-				this.fetchedProviders.add(provider);
-				this.lastUpdated.set(provider, new Date());
-			}
-			if (failure) this.lastRefreshErrors.set(provider, failure);
-			else this.lastRefreshErrors.delete(provider);
+			this.providerStates.set(result.provider, applyProviderRead(this.providerStates.get(result.provider), result,
+				{ attemptedAt, completedAt }, [loaded.settings.managementKey]));
 		}
 		this.rejectedManagementKey = results.managementAuthFailed ? loaded.settings.managementKey : undefined;
-		this.rejectedManagementError = results.managementAuthFailed
-			? "management authentication failed; run /cliproxy-usage setup"
-			: undefined;
-		this.renderCurrentModel(request.ctx);
-		this.emitChange();
+		this.publish(request.ctx);
 		for (const provider of request.notifyProviders) this.notifyProviderState(request.ctx, provider);
 	}
 
@@ -397,7 +358,7 @@ export class UsageController {
 		void promise.catch((error) => {
 			if (this.active && generation === this.generation && ctx.hasUI) {
 				ctx.ui.notify(
-					`CLIProxyAPI usage refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+					`CLIProxyAPI usage refresh failed: ${safeUsageText(error instanceof Error ? error.message : String(error), [this.settingsSnapshot.managementKey])}`,
 					"error",
 				);
 			}
@@ -477,23 +438,17 @@ export class UsageController {
 				const close = () => {
 					if (closed) return;
 					closed = true;
+					this.detailsViews.delete(view);
+					unsubscribe();
 					done();
 				};
+				const view = { provider, close };
+				this.detailsViews.add(view);
 				const component = new UsageDetailsComponent(tui, theme, {
-					getItems: () => {
-						const items = this.itemsForProvider(provider);
-						const error = this.lastRefreshErrors.get(provider);
-						return !this.fetchedProviders.has(provider) &&
-							error &&
-							items.every((item) => item.error)
-							? []
-							: items;
-					},
-					hasFetched: () => this.fetchedProviders.has(provider),
-					isRefreshing: () => this.providerIsRefreshing(provider),
-					getError: () => this.lastRefreshErrors.get(provider),
+					getSnapshot: () => !closed && this.active && generation === this.generation &&
+						this.providerForContext(ctx) === provider ? this.getSnapshot(ctx) : this.snapshotForProvider(undefined),
 					onRefresh: () => {
-						if (!this.active || generation !== this.generation) return;
+						if (closed || !this.active || generation !== this.generation) return;
 						this.reportBackgroundError(
 							ctx,
 							this.refreshCurrent(ctx, { force: true }),
@@ -502,18 +457,23 @@ export class UsageController {
 					onClose: close,
 					onDispose: () => {
 						closed = true;
+						this.detailsViews.delete(view);
 						unsubscribe();
 					},
 				});
 				unsubscribe = this.subscribe(() => {
-					if (!this.active || generation !== this.generation) return;
+					if (closed) return;
+					if (!this.active || generation !== this.generation || this.providerForContext(ctx) !== provider) {
+						close();
+						return;
+					}
 					component.invalidate();
 					tui.requestRender();
 				});
 				queueMicrotask(() => {
 					if (
 						!closed &&
-						this.active && generation === this.generation &&
+						this.active && generation === this.generation && this.providerForContext(ctx) === provider &&
 						this.providerIsStale(provider) &&
 						!this.providerIsRefreshing(provider)
 					) {
@@ -546,9 +506,9 @@ export class UsageController {
 		this.clearAllCaches();
 		this.sourceBoundary = undefined;
 		this.rejectedManagementKey = undefined;
-		this.rejectedManagementError = undefined;
 		this.lastSettingsWarning = undefined;
 		this.active = true;
+		this.settingsKnown = true;
 		this.settingsSnapshot = structuredClone(loaded.settings);
 		this.maxVisibleAccounts = loaded.settings.maxVisibleAccounts;
 		this.scheduleRefresh(ctx, loaded.settings.refreshMinutes);
@@ -562,9 +522,9 @@ export class UsageController {
 		this.timer = undefined;
 		this.clearAllCaches();
 		this.rejectedManagementKey = undefined;
-		this.rejectedManagementError = undefined;
 		this.lastSettingsWarning = undefined;
 		this.sourceBoundary = undefined;
+		this.settingsKnown = false;
 		this.changeListeners.clear();
 		clearUsage(ctx);
 	}
@@ -574,11 +534,8 @@ export class UsageController {
 		provider: ProviderName | undefined,
 	): void {
 		if (!this.active) return;
-		renderUsage(
-			ctx,
-			provider && this.settingsSnapshot.providers[provider] ? this.itemsForProvider(provider) : [],
-			this.maxVisibleAccounts,
-		);
+		this.closeDetails(provider && this.settingsSnapshot.providers[provider] ? provider : undefined);
+		this.publish(ctx);
 		if (!provider || !this.settingsSnapshot.providers[provider]) return;
 		if (
 			this.providerIsStale(provider) &&
@@ -603,14 +560,15 @@ export class UsageController {
 	): Promise<void> {
 		if (!this.active) return;
 		if (this.settingsInvalidateWork(settings)) this.invalidateWork(ctx);
+		this.settingsKnown = true;
 		this.settingsSnapshot = structuredClone(settings);
 		this.scheduleRefresh(ctx, settings.refreshMinutes);
 		if (changedId === "maxVisibleAccounts") {
 			this.maxVisibleAccounts = settings.maxVisibleAccounts;
-			this.renderCurrentModel(ctx);
+			this.publish(ctx);
 			return;
 		}
-		if (changedId === "refreshMinutes") return;
+		if (changedId === "refreshMinutes") { this.publish(ctx); return; }
 		if ((PROVIDERS as readonly string[]).includes(changedId)) {
 			const provider = changedId as ProviderName;
 			if (!settings.providers[provider]) {
@@ -626,18 +584,17 @@ export class UsageController {
 		this.clearAllCaches();
 		this.sourceBoundary = undefined;
 		this.rejectedManagementKey = undefined;
-		this.rejectedManagementError = undefined;
 		this.renderCurrentModel(ctx);
 		await this.refreshCurrent(ctx, { force: true });
 	}
 
 	resetSettings(settings: Settings, ctx?: ExtensionContext): void {
 		this.invalidateWork(ctx);
+		this.settingsKnown = true;
 		this.settingsSnapshot = structuredClone(settings);
 		this.clearAllCaches();
 		this.sourceBoundary = undefined;
 		this.rejectedManagementKey = undefined;
-		this.rejectedManagementError = undefined;
 		if (ctx) this.renderCurrentModel(ctx);
 		this.emitChange();
 	}
@@ -650,16 +607,67 @@ export class UsageController {
 			this.clearAllCaches();
 			this.sourceBoundary = undefined;
 			this.rejectedManagementKey = undefined;
-			this.rejectedManagementError = undefined;
 		}
 		for (const provider of PROVIDERS) if (!settings.providers[provider]) this.clearProviderCache(provider);
+		this.settingsKnown = true;
 		this.settingsSnapshot = structuredClone(settings);
 		this.maxVisibleAccounts = settings.maxVisibleAccounts;
 		if (ctx) this.renderCurrentModel(ctx);
 		this.emitChange();
 	}
 
+	private displayUrl(value?: string): string {
+		if (!value) return "not found";
+		try {
+			const url = new URL(value);
+			url.username = "";
+			url.password = "";
+			return safeUsageText(url.toString(), [this.settingsSnapshot.managementKey]);
+		} catch { return "invalid URL"; }
+	}
+
+	async showStatus(ctx: ExtensionContext): Promise<void> {
+		if (!this.active) return;
+		const generation = this.generation;
+		try {
+			const loaded = await loadSettings(this.paths.settingsPath, this.paths.legacySettingsPath);
+			if (!this.active || generation !== this.generation) return;
+			const source = await resolveManagementSource(loaded.settings, this.paths.providerConfigPath);
+			if (!this.active || generation !== this.generation) return;
+			this.syncSettings(loaded.settings, ctx);
+			if (this.sourceBoundary && (this.sourceBoundary.source.managementUrl !== source.managementUrl ||
+				this.sourceBoundary.key !== loaded.settings.managementKey)) {
+				this.invalidateWork(ctx);
+				this.clearAllCaches();
+				this.rejectedManagementKey = undefined;
+			}
+			this.sourceBoundary = { source: structuredClone(source), key: loaded.settings.managementKey };
+			this.notifySettingsWarnings(ctx, loaded);
+			this.publish(ctx);
+			const snapshot = this.getSnapshot(ctx);
+			const providers = PROVIDERS.filter((provider) => loaded.settings.providers[provider]).map((provider) => PROVIDER_LABELS[provider]);
+			if (ctx.hasUI) ctx.ui.notify([
+				`Settings: ${loaded.path}`,
+				`Provider config: ${this.paths.providerConfigPath}`,
+				`Provider base URL: ${this.displayUrl(source.providerBaseUrl)}`,
+				`Management URL: ${this.displayUrl(source.managementUrl)}`,
+				`Management key: ${loaded.settings.managementKey ? "configured" : "missing"}`,
+				`Current model: ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "not selected"}`,
+				`Current usage provider: ${snapshot.provider ? PROVIDER_LABELS[snapshot.provider] : "unsupported"}`,
+				`Refresh: ${loaded.settings.refreshMinutes} min`,
+				`Visible accounts: ${loaded.settings.maxVisibleAccounts}`,
+				`Providers: ${providers.join(", ") || "none"}`,
+				formatSnapshotDetails(snapshot),
+			].join("\n"), snapshot.state === "setup-required" || snapshot.state === "error" || snapshot.partial || snapshot.stale || !loaded.writable ? "warning" : "info");
+		} catch (error) {
+			if (this.active && generation === this.generation && ctx.hasUI) {
+				ctx.ui.notify(`Failed to read usage status: ${safeUsageText(error instanceof Error ? error.message : String(error), [this.settingsSnapshot.managementKey])}`, "error");
+			}
+		}
+	}
+
 	lastRefresh(provider: ProviderName | undefined): Date | undefined {
-		return provider ? this.lastUpdated.get(provider) : undefined;
+		const at = provider ? this.providerStates.get(provider)?.lastCompleteSuccessAt : undefined;
+		return at === undefined ? undefined : new Date(at);
 	}
 }

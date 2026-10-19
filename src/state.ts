@@ -40,7 +40,7 @@ function safeId(value: string | undefined, redactions: readonly string[]): strin
 }
 
 function cloneData(data: UsageData, redactions: readonly string[]): UsageData {
-	const windows = data.windows.filter((window) => Number.isFinite(window.used)).map((window) => {
+	const windows = data.windows.filter((window) => Number.isFinite(window.used) && window.used >= 0).map((window) => {
 		const reset = window.resetsAt?.getTime();
 		return {
 			label: safeUsageText(window.label, redactions),

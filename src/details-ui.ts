@@ -8,25 +8,25 @@ import {
 } from "@earendil-works/pi-tui";
 import { PROVIDER_LABELS } from "./providers.js";
 import {
+	configurationStatusText,
+	formatAccountSnapshotMetadata,
 	formatBalance,
 	formatResetTime,
 	remainingColor,
 	remainingPercent,
+	snapshotStatusText,
 	usageBar,
 } from "./ui.js";
-import type { AccountUsage, UsageWindow } from "./types.js";
+import type { UsageSnapshot, UsageWindow } from "./types.js";
 
 export type UsageDetailsState = {
-	getItems: () => AccountUsage[];
-	hasFetched: () => boolean;
-	isRefreshing: () => boolean;
-	getError: () => string | undefined;
+	getSnapshot: () => UsageSnapshot;
 	onRefresh: () => void;
 	onClose: () => void;
 	onDispose?: () => void;
 };
 
-function windowText(window: UsageWindow, now: number, theme: PiTheme): string {
+function windowText(window: Readonly<UsageWindow>, now: number, theme: PiTheme): string {
 	const remaining = remainingPercent(window);
 	const bar = usageBar(remaining);
 	const filled = bar.match(/^━*/)?.[0] ?? "";
@@ -45,6 +45,7 @@ function windowText(window: UsageWindow, now: number, theme: PiTheme): string {
 /** Interactive, cache-backed account usage view shown by /cliproxy-usage. */
 export class UsageDetailsComponent implements Component {
 	private scrollOffset = 0;
+	private disposed = false;
 	private readonly clock: ReturnType<typeof setInterval>;
 
 	constructor(
@@ -52,13 +53,14 @@ export class UsageDetailsComponent implements Component {
 		private readonly theme: PiTheme,
 		private readonly state: UsageDetailsState,
 	) {
-		// Reset countdowns are derived from Date.now(), so redraw periodically while
+		// Snapshot ages and reset countdowns advance on a local redraw while
 		// the view is open without issuing another network request.
 		this.clock = setInterval(() => this.tui.requestRender(), 30_000);
 		this.clock.unref?.();
 	}
 
 	handleInput(data: string): void {
+		if (this.disposed) return;
 		if (matchesKey(data, "enter") || matchesKey(data, "escape")) {
 			this.state.onClose();
 			return;
@@ -94,110 +96,76 @@ export class UsageDetailsComponent implements Component {
 	}
 
 	render(width: number): string[] {
-		if (width <= 1) return [truncateToWidth("…", width, "", false)];
+		if (this.disposed) return [];
+		const rows = Math.max(0, Math.floor(this.tui.terminal.rows));
+		if (rows === 0 || width <= 0) return [];
+		const snapshot = this.state.getSnapshot();
+		const status = snapshotStatusText(snapshot) || "ready";
+		const statusColor = snapshot.state === "error" ? "error" : snapshot.refreshing ? "warning" : "dim";
+		const pinned = [this.theme.fg(statusColor, status)];
+		const error = snapshot.error ?? snapshot.accounts
+			.filter((item) => item.error)
+			.map((item) => `${item.label || PROVIDER_LABELS[item.provider]}: ${item.error}`)
+			.join(" · ");
+		const message = configurationStatusText(snapshot.configuration);
+		if (error || message) pinned.push(this.theme.fg("error", [error, message].filter(Boolean).join(" · ")));
 
-		const innerWidth = Math.max(0, width - 2);
-		const title = truncateToWidth(" CLIProxyAPI Usage ", innerWidth, "", false);
-		const titleWidth = visibleWidth(title);
-		const border = (text: string) => this.theme.fg("border", text);
-		const topRemaining = Math.max(0, innerWidth - titleWidth);
-		const topLeft = Math.floor(topRemaining / 2);
-		const topRight = topRemaining - topLeft;
-		const top =
-			border(`╭${"─".repeat(topLeft)}`) +
-			this.theme.fg("accent", title) +
-			border(`${"─".repeat(topRight)}╮`);
-		const bottom = border(`╰${"─".repeat(innerWidth)}╯`);
-		const line = (content: string): string =>
-			border("│") +
-			truncateToWidth(content, innerWidth, "", true) +
-			border("│");
-
-		const now = Date.now();
 		const body: string[] = [];
-		const items = this.state.getItems();
-		for (const item of items) {
-			const provider = this.theme.fg(
-				"accent",
-				PROVIDER_LABELS[item.provider],
-			);
+		for (const item of snapshot.accounts) {
+			const provider = this.theme.fg("accent", PROVIDER_LABELS[item.provider]);
 			const label = item.label || "remote";
 			body.push(`${provider} ${this.theme.fg("dim", "·")} ${this.theme.fg("text", label)}`);
-			if (item.error) {
-				body.push(this.theme.fg("error", `  ! ${item.error}`));
+			if (item.result === "unknown") {
+				body.push(this.theme.fg("dim", "  unknown"));
 			} else if (item.balance) {
-				const unavailable =
-					!item.balance.available ||
-					item.balance.amounts.every((value) => value.amount <= 0);
-				body.push(
-					`  ${this.theme.fg(
-						unavailable ? "error" : "text",
-						formatBalance(item.balance) || "No balance",
-					)}`,
-				);
+				const unavailable = !item.balance.available || item.balance.amounts.every((value) => value.amount <= 0);
+				body.push(`  ${this.theme.fg(unavailable ? "error" : "text", formatBalance(item.balance) || "unknown")}`);
 			} else if (item.windows.length) {
-				for (const window of item.windows) {
-					body.push(windowText(window, now, this.theme));
-				}
+				for (const window of item.windows) body.push(windowText(window, snapshot.generatedAt, this.theme));
 			} else {
-				body.push(this.theme.fg("dim", "  No usage window"));
+				body.push(this.theme.fg("dim", `  ${item.result === "error" ? "error" : "unknown"}`));
+			}
+			for (const metadata of formatAccountSnapshotMetadata(item, snapshot.generatedAt)) {
+				body.push(this.theme.fg(item.error ? "error" : "dim", `  ${metadata}`));
 			}
 			body.push("");
 		}
-
-		if (!items.length) {
-			body.push(
-				this.theme.fg(
-					"dim",
-					this.state.hasFetched()
-						? "No enabled CLIProxyAPI accounts found."
-						: "No cached usage yet.",
-				),
-			);
-		}
-
-		const error = this.state.getError();
-		const status = this.state.isRefreshing()
-			? this.theme.fg("warning", "Refreshing…")
-			: error
-				? this.theme.fg(
-						"error",
-						`Refresh failed: ${error}${this.state.hasFetched() ? " · showing cached data" : ""}`,
-					)
-				: undefined;
-		if (status) body.unshift(status, "");
-
 		while (body.at(-1) === "") body.pop();
-		const footerText = [
-			...(this.hasOverflow(body, this.bodyHeight()) ? ["↑↓ scroll"] : []),
-			"r refresh",
-			"Enter/Esc close",
-		].join(" · ");
-		const available = this.bodyHeight();
+
+		// On tiny terminals keep the state and exit hint, sacrificing frame/body first.
+		const framed = rows >= 6 && width >= 4;
+		const innerWidth = framed ? width - 2 : width;
+		const shortFooter = innerWidth >= visibleWidth("r refresh · Enter/Esc close")
+			? "r refresh · Enter/Esc close" : "Esc close";
+		if (rows === 1) {
+			const close = visibleWidth(`${status} · Esc close`) <= width ? " · Esc close"
+				: width >= 6 ? " · Esc" : "";
+			return [truncateToWidth(status, width - visibleWidth(close), "", false) + close];
+		}
+		const visiblePinned = pinned.slice(0, Math.max(1, rows - (framed ? 3 : 1)));
+		const available = Math.max(0, rows - (framed ? 3 : 1) - visiblePinned.length);
 		const maxOffset = Math.max(0, body.length - available);
 		this.scrollOffset = Math.min(this.scrollOffset, maxOffset);
 		const visibleBody = body.slice(this.scrollOffset, this.scrollOffset + available);
+		const footer = `${body.length > available && innerWidth >= visibleWidth(`↑↓ scroll · ${shortFooter}`) ? "↑↓ scroll · " : ""}${shortFooter}`;
+		const contents = [...visiblePinned, ...visibleBody, this.theme.fg("dim", footer)];
+		if (!framed) return contents.map((line) => truncateToWidth(line, width, "", false));
 
-		return [
-			top,
-			...visibleBody.map(line),
-			line(this.theme.fg("dim", footerText)),
-			bottom,
-		];
+		const title = truncateToWidth(" CLIProxyAPI Usage ", innerWidth, "", false);
+		const border = (text: string) => this.theme.fg("border", text);
+		const remaining = Math.max(0, innerWidth - visibleWidth(title));
+		const left = Math.floor(remaining / 2);
+		const top = border(`╭${"─".repeat(left)}`) + this.theme.fg("accent", title) + border(`${"─".repeat(remaining - left)}╮`);
+		const line = (content: string) => border("│") + truncateToWidth(content, innerWidth, "", true) + border("│");
+		return [top, ...contents.map(line), border(`╰${"─".repeat(innerWidth)}╯`)];
 	}
 
 	invalidate(): void {}
 
 	dispose(): void {
+		if (this.disposed) return;
+		this.disposed = true;
 		clearInterval(this.clock);
 		this.state.onDispose?.();
-	}
-
-	private bodyHeight(): number {
-		return Math.max(1, this.tui.terminal.rows - 3);
-	}
-
-	private hasOverflow(body: string[], available: number): boolean {
-		return body.length > available;
 	}
 }

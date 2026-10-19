@@ -228,6 +228,7 @@ test("real zero quota and finite zero/negative balances are valid; nonfinite dat
 		assert.deepEqual(value.accounts[0]?.windows, []);
 		assert.equal(value.accounts[0]?.balance, undefined);
 	}
+	assert.equal(snapshot(read([{ ...item(), windows: [{ label: "5h", used: -1 }] }])).state, "unknown", "negative consumption must not look like full capacity");
 	assert.equal(snapshot(read([{ ...item(), windows: [], balance: { available: false, amounts: [] } }])).state, "unknown");
 	const mixed = read([{ ...item(), windows: [{ label: "bad", used: NaN }, { label: "zero", used: 0 }],
 		balance: { available: true, amounts: [{ currency: "USD", amount: Infinity }, { currency: "CNY", amount: 0 }] } }]);
