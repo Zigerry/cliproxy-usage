@@ -4,7 +4,7 @@ Contributions are welcome. Keep changes focused, typed, and easy to review.
 
 ## Setup
 
-Requirements: Node.js 20+ and Pi Coding Agent.
+Requirements: Node.js 22.19.0+ and Pi Coding Agent. CI uses Node.js 24.
 
 ```bash
 git clone git@github.com:Zigerry/cliproxy-usage.git
@@ -31,6 +31,8 @@ npm pack --dry-run
 ```
 
 Add or update tests for behavior changes and bug fixes. Tests belong in `test/`, use TypeScript and `node:test`, and must not depend on real credentials or provider requests.
+
+CI checks the locked Pi SDK (`0.80.10`) and `1.3.0` in separate jobs. The latter changes only its job-local installation; keep the repository lockfile unchanged unless an SDK upgrade is intentional. For isolated PTY checks with synthetic accounts and network guards, see [the compatibility report](docs/compatibility-report.md). Python with `pexpect` is optional developer tooling for that manual check, not an extension dependency.
 
 ## Git workflow
 
