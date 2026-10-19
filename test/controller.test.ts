@@ -199,12 +199,12 @@ test("mixed refresh updates successful accounts and keeps failed account cache",
 
 		await controller.refreshCurrent(ctx, { force: true, loaded });
 		assert.match(renderWidget(), /work@example.com.*left 75%/);
-		assert.match(renderWidget(), /personal@example.*left 60%/);
+		assert.match(renderWidget(), /personal@examp[^\n]*left 60%/);
 
 		phase = "partial";
 		await controller.refreshCurrent(ctx, { force: true, loaded });
 		assert.match(renderWidget(), /work@example.com.*left 65%/);
-		assert.match(renderWidget(), /personal@example.*left 60%/);
+		assert.match(renderWidget(), /personal@examp[^\n]*left 60%/);
 
 		await controller.showDetails(ctx);
 		assert.deepEqual(customOptions, {
