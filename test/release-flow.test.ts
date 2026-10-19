@@ -103,7 +103,7 @@ globalThis.fetch = async (url, init) => {
   const state = JSON.parse(readFileSync(process.env.FIXTURE_STATE, 'utf8'));
   const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
   if (path === prefix + '/latest') return json({ name: 'cliproxy-usage', version: state.latest });
-  if (path === prefix + '/1.2.3') return state.metadata ? json(state.metadata) : json({ error: 'Not found' }, 404);
+  if (path === prefix + '/1.2.3') return state.metadata ? json(state.metadata) : json('version not found: 1.2.3', 404);
   assert.ok(state.metadata, 'Unpublished tarball');
   return new Response(Buffer.from(state.registryBytes, 'base64'));
 };
