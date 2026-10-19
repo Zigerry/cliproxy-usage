@@ -1,6 +1,6 @@
 # Batch E verification
 
-Issue #23, stacked on D PR #22 (`feat/21-refresh-backoff`). Implementation and verification saved; advisor completion review pending. No merge, release, version/SDK upgrade or new runtime dependency.
+Issue #23, stacked on D PR #22 (`feat/21-refresh-backoff`). Implementation and advisor completion review passed within the documented display scope and verification limits. No merge, release, version/SDK upgrade or new runtime dependency.
 
 ## Independent commits
 
