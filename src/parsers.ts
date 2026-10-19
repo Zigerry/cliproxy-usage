@@ -9,14 +9,20 @@ export function toNumber(value: unknown): number | undefined {
 	return undefined;
 }
 
+function positiveNumber(value: unknown): number | undefined {
+	const parsed = toNumber(value);
+	return parsed !== undefined && parsed > 0 ? parsed : undefined;
+}
+
+function validDate(value: string | number): Date | undefined {
+	const parsed = new Date(value);
+	return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+}
+
 function toDate(value: unknown): Date | undefined {
-	if (typeof value === "string") {
-		const parsed = new Date(value);
-		return Number.isNaN(parsed.getTime()) ? undefined : parsed;
-	}
+	if (typeof value === "string") return validDate(value);
 	const raw = toNumber(value);
-	if (raw === undefined) return undefined;
-	return new Date(raw < 1e10 ? raw * 1000 : raw);
+	return raw === undefined ? undefined : validDate(raw < 1e10 ? raw * 1000 : raw);
 }
 
 /** Human-readable window length: 18000 → "5h", 604800 → "7d". */
@@ -97,29 +103,18 @@ function codexWindow(
 	return {
 		label: "",
 		used,
-		seconds: toNumber(item?.limit_window_seconds),
+		seconds: positiveNumber(item?.limit_window_seconds),
 		resetsAt:
 			toDate(item?.reset_at) ??
 			(resetAfter === undefined
 				? undefined
-				: new Date(Date.now() + resetAfter * 1000)),
+				: validDate(Date.now() + resetAfter * 1000)),
 	};
 }
 
-/**
- * Classify a Codex rate-limit window. The API does not guarantee which of
- * primary/secondary holds the 5-hour session window: on some plans primary
- * is the 7-day window. Classify by `limit_window_seconds` first, then fall
- * back to the reset distance, and only then to a neutral label — never
- * assume a slot means "session".
- */
+/** Only explicit durations prove a window's length; neither slot nor reset distance does. */
 function codexLabel(window: UsageWindow & { seconds?: number }): string {
-	if (window.seconds !== undefined) return durationLabel(window.seconds);
-	if (window.resetsAt !== undefined) {
-		const hours = (window.resetsAt.getTime() - Date.now()) / 3_600_000;
-		return hours <= 24 ? "5h" : "7d";
-	}
-	return "limit";
+	return window.seconds === undefined ? "limit" : durationLabel(window.seconds);
 }
 
 export function parseCodex(body: unknown): Pick<AccountUsage, "windows"> {
@@ -143,10 +138,13 @@ export function parseGrok(body: unknown): Pick<AccountUsage, "windows"> {
 		| Record<string, unknown>
 		| undefined;
 	const period = config?.currentPeriod as Record<string, unknown> | undefined;
-	if (period?.type !== "USAGE_PERIOD_TYPE_WEEKLY") return { windows: [] };
+	const used = toNumber(config?.creditUsagePercent);
+	if (period?.type !== "USAGE_PERIOD_TYPE_WEEKLY" || used === undefined) {
+		return { windows: [] };
+	}
 	return windows({
 		label: "7d",
-		used: toNumber(config?.creditUsagePercent) ?? 0,
+		used,
 		resetsAt: toDate(period.end),
 	});
 }
@@ -155,44 +153,49 @@ function kimiPercent(detail: Record<string, unknown>): number | undefined {
 	const limit = toNumber(detail.limit);
 	const used = toNumber(detail.used);
 	if (used !== undefined && limit !== undefined && limit > 0) {
-		return (used / limit) * 100;
+		return toNumber((used / limit) * 100);
 	}
 	const remaining = toNumber(detail.remaining);
 	if (remaining !== undefined && limit !== undefined && limit > 0) {
-		return ((limit - remaining) / limit) * 100;
+		return toNumber(((limit - remaining) / limit) * 100);
 	}
 	return undefined;
 }
 
+function record(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? value as Record<string, unknown>
+		: undefined;
+}
+
 function kimiWindowSeconds(value: unknown): number | undefined {
-	const item = value as Record<string, unknown> | undefined;
-	const duration = toNumber(item?.duration);
+	const item = record(value);
+	const duration = positiveNumber(item?.duration);
 	if (duration === undefined) return undefined;
 	switch (item?.timeUnit) {
-		case "TIME_UNIT_MINUTE":
-			return duration * 60;
-		case "TIME_UNIT_HOUR":
-			return duration * 3600;
-		case "TIME_UNIT_DAY":
-			return duration * 86400;
-		case "TIME_UNIT_WEEK":
-			return duration * 604800;
-		default:
+		case "TIME_UNIT_SECOND":
 			return duration;
+		case "TIME_UNIT_MINUTE":
+			return positiveNumber(duration * 60);
+		case "TIME_UNIT_HOUR":
+			return positiveNumber(duration * 3600);
+		case "TIME_UNIT_DAY":
+			return positiveNumber(duration * 86400);
+		case "TIME_UNIT_WEEK":
+			return positiveNumber(duration * 604800);
+		default:
+			return undefined;
 	}
 }
 
 export function parseKimi(body: unknown): Pick<AccountUsage, "windows"> {
-	const root = body as Record<string, unknown> | undefined;
+	const root = record(body);
 	const result: UsageWindow[] = [];
 	const limits = Array.isArray(root?.limits) ? root.limits : [];
 	for (const entry of limits) {
-		const item = entry as Record<string, unknown> | undefined;
-		const detail = (
-			typeof item?.detail === "object" && item.detail !== null
-				? item.detail
-				: item
-		) as Record<string, unknown>;
+		const item = record(entry);
+		if (!item) continue;
+		const detail = record(item.detail) ?? item;
 		const used = kimiPercent(detail);
 		if (used === undefined) continue;
 		const seconds = kimiWindowSeconds(item?.window);
@@ -202,7 +205,7 @@ export function parseKimi(body: unknown): Pick<AccountUsage, "windows"> {
 			resetsAt: toDate(detail.resetTime ?? detail.reset_at),
 		});
 	}
-	const plan = root?.usage as Record<string, unknown> | undefined;
+	const plan = record(root?.usage);
 	if (plan) {
 		const used = kimiPercent(plan);
 		if (used !== undefined) {
