@@ -47,8 +47,15 @@ than treating this as a durable release queue.
    commit, type and asset identity. Existing assets are downloaded and verified;
    mismatches stop, never overwrite. No asset-clobber option is used. A public
    existing release is accepted only for an already verified npm version, with
-   both matching assets present. An API error is not a missing release: only an
-   explicit GitHub HTTP404 `Not Found` permits draft creation.
+   both matching assets present. Stage and finalization share a read-only native
+   probe: successful `gh api --paginate --slurp` fetches every authenticated
+   releases-list page (including drafts), strictly matches the tag and rejects
+   malformed/duplicate matches, then reads and validates the identified numeric
+   release ID. Only a complete successful list with no match permits creation.
+   List failures/partial output, ID lookup404 and ambiguous results never mean
+   absence. Published-by-tag lookup is not used for draft discovery. Queries
+   exceeding the 16MiB metadata buffer fail closed. The stage records gh's actual
+   version; upload/edit retain its separately documented draft-aware lookup.
 6. Only the npm publishing step receives repository secret `NPM_TOKEN` as
    `NODE_AUTH_TOKEN`. It publishes the **.tgz**, never a directory, with scripts
    disabled, public access and provenance (`id-token: write`). No other step
@@ -94,9 +101,27 @@ unpublished. If npm succeeds but verification or GitHub fails, stop and rerun
 Publish at the same tag after investigation. Never unpublish/reuse a version as
 rollback, move a tag, replace assets, or publish different bytes to "repair" it.
 The rerun re-packs with the pinned toolchain and must reproduce the stored and
-registry bytes. If it cannot, preserve the draft/artifacts and investigate
+registry bytes. A transport/CDN tarball read error stops rather than expanding the
+bounded missing-metadata retry policy; investigate and use the verified same-tag
+rerun, never call such a failure success. If it cannot, preserve the draft/artifacts and investigate
 manually. A legacy release whose target/record/assets do not satisfy the gates
 needs explicit manual investigation, not an automatic overwrite.
+
+GitHub documents that an upload502 can leave an empty `starter` asset. The gate
+rejects it, and a same-name upload must not overwrite it. An operator must confirm
+the failed upload, exact release/asset ID and starter state, then obtain explicit
+approval to remove only that failed starter before same-tag recovery. Never delete
+an uploaded/verified or merely mismatched asset to force a gate to pass.
+
+Historical target commits with workflow-file differences from current main can
+require Workflows-write permission for GitHub release mutations; the standard
+GITHUB_TOKEN cannot obtain it. Review workflow-path differences **before** any
+historical recovery publication and stop for an approved recovery plan when this
+condition applies. An ancestor-of-main check alone does not establish mutation
+permission. Current-main first publication does not exercise this historical case.
+See GitHub's [create/update release](https://docs.github.com/rest/releases/releases)
+and [asset upload](https://docs.github.com/rest/releases/assets#upload-a-release-asset)
+contracts. The tool does not automatically switch credentials or deletion paths.
 
 Local verification: `npm test` and `npm run check` include typed helper imports
 through TSX `.js` resolution. Run the helper natively with Node 24 (erasable

@@ -7,7 +7,7 @@ import test from "node:test";
 import { gzipSync } from "node:zlib";
 import {
   validateSource, inspectArtifact, releaseRecord, publicationPlan,
-  registryVersion, registryLatest, verifyRegistry, githubState,
+  registryVersion, registryLatest, verifyRegistry, githubState, githubReleaseId,
   type Identity, type SourceInput,
 } from "../scripts/release.js";
 
@@ -152,12 +152,25 @@ test("new publication cannot downgrade latest; verified historical reruns cannot
 const ghResponse = (status: number, body: unknown) => `HTTP/2.0 ${status} Test\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(body)}`;
 const assetNames = ["cliproxy-usage-1.2.3.tgz", "release-record.json"];
 const release = { id: 1, tag_name: identity.tag, target_commitish: identity.commit, draft: true, prerelease: false, assets: assetNames.map((name, i) => ({ id: i + 2, name, state: "uploaded" })) };
-test("GitHub only explicit API404 is absent; existing release/tag/assets must match, public requires npm verification", () => {
-  assert.equal(githubState(ghResponse(404, { message: "Not Found" }), false, identity, false, false).exists, false);
+test("authenticated complete page discovery finds drafts and rejects ambiguous or malformed lists", () => {
+  const other = { id: 10, tag_name: "v0.1.0" };
+  assert.equal(githubReleaseId(JSON.stringify([[]]), identity), undefined);
+  assert.equal(githubReleaseId(JSON.stringify([[other], [release]]), identity), release.id);
+  for (const pages of [[], {}, null, [null], [[null]], [[{ id: "1", tag_name: identity.tag }]],
+    [[{ id: 0, tag_name: identity.tag }]], [[{ id: 1 }]], [[release], [release]],
+    [[release, { ...release, id: 2 }]], { message: "forbidden" }, [[other], "truncated page"]]) {
+    assert.throws(() => githubReleaseId(JSON.stringify(pages), identity));
+  }
+  assert.throws(() => githubReleaseId("not json", identity));
+});
+
+test("identified GitHub release must match ID/tag/assets; lookup404 never means absence", () => {
+  assert.throws(() => githubState(ghResponse(404, { message: "Not Found" }), false, identity, false, false));
   for (const status of [401, 403, 429, 500]) assert.throws(() => githubState(ghResponse(status, { message: "Not Found" }), false, identity, false, false));
   assert.throws(() => githubState("", false, identity, false, false));
   assert.throws(() => githubState(ghResponse(404, {}), false, identity, false, false));
-  const state = githubState(ghResponse(200, release), true, identity, false, true);
+  assert.throws(() => githubState(ghResponse(200, release), true, identity, false, true, 99));
+  const state = githubState(ghResponse(200, release), true, identity, false, true, release.id);
   assert.equal(state.exists, true); assert.equal(state.draft, true);
   assert.deepEqual(state.assets, release.assets.map(({ id, name }) => ({ id, name })));
   for (const bad of [
@@ -193,6 +206,9 @@ test("workflow wiring: one orchestrator, isolated SDK checks, draft before tgz p
   assert.match(publish, /\["0.80.10", "1.3.0"\]/); assert.match(publish, /needs:.*test/);
   assert.match(publish, /ref: \$\{\{ github.ref \}\}/); assert.doesNotMatch(publish, /ref:.*inputs.tag/);
   assert.match(publish, /npm install --global npm@12.2.0/);
+  assert.match(publish, /gh --version/);
+  assert.equal((publish.match(/node scripts\/release\.ts gh-probe/g) ?? []).length, 2);
+  assert.doesNotMatch(publish, /releases\/tags\//);
   assert.equal((publish.match(/NODE_AUTH_TOKEN:/g) ?? []).length, 1);
   assert.match(publish, /id-token: write/); assert.match(publish, /npm publish "\$ARTIFACT".*--provenance/);
   assert.doesNotMatch(publish, /--clobber|npm view|npm publish --access/);
