@@ -6,13 +6,9 @@ import {
 import { join } from "node:path";
 import { UsageController } from "./src/controller.js";
 import { loadSettings, saveSettings } from "./src/settings.js";
-import { promptManagementKey, showSettings } from "./src/settings-ui.js";
-import {
-	managementErrorMessage,
-	providerForModel,
-	resolveManagementSource,
-	validateManagementAccess,
-} from "./src/usage.js";
+import { showSettings } from "./src/settings-ui.js";
+import { providerForModel } from "./src/usage.js";
+import { setupManagement } from "./src/setup.js";
 
 const commandItems = [
 	{ value: "setup", description: "Configure Management API access" },
@@ -36,55 +32,6 @@ export default function (pi: ExtensionAPI) {
 		legacySettingsPath: LEGACY_SETTINGS_PATH,
 		providerConfigPath: PROVIDER_CONFIG_PATH,
 	});
-
-	const setupManagement = async (ctx: ExtensionCommandContext) => {
-		const loaded = await loadSettings(SETTINGS_PATH, LEGACY_SETTINGS_PATH);
-		if (!loaded.writable) {
-			ctx.ui.notify(
-				`Cannot update invalid settings: ${loaded.warnings.join(", ")}`,
-				"error",
-			);
-			return;
-		}
-		const source = await resolveManagementSource(
-			loaded.settings,
-			PROVIDER_CONFIG_PATH,
-		);
-		if (source.error || !source.managementUrl) {
-			ctx.ui.notify(
-				source.error ||
-					"CLIProxyAPI base URL not found. Run /login CLIProxyAPI or set managementUrl in settings.",
-				"error",
-			);
-			return;
-		}
-		const key = await promptManagementKey(ctx, source.managementUrl);
-		if (key === undefined) return;
-		ctx.ui.setStatus(
-			"cliproxy-usage",
-			ctx.ui.theme.fg("dim", "validating management access…"),
-		);
-		try {
-			await validateManagementAccess(
-				loaded.settings,
-				PROVIDER_CONFIG_PATH,
-				key,
-			);
-		} catch (error) {
-			ctx.ui.notify(managementErrorMessage(error, "setup"), "error");
-			return;
-		} finally {
-			ctx.ui.setStatus("cliproxy-usage", undefined);
-		}
-		loaded.settings.managementKey = key;
-		await saveSettings(loaded.settings, loaded.raw, SETTINGS_PATH);
-		usage.resetSettings(loaded.settings, ctx);
-		ctx.ui.notify(
-			`CLIProxyAPI management access configured for ${source.managementUrl}.`,
-			"info",
-		);
-		await usage.refreshCurrent(ctx, { notify: true, force: true });
-	};
 
 	const clearManagement = async (ctx: ExtensionCommandContext) => {
 		const loaded = await loadSettings(SETTINGS_PATH, LEGACY_SETTINGS_PATH);
@@ -143,7 +90,14 @@ export default function (pi: ExtensionAPI) {
 			const action = args.trim().toLowerCase();
 			if (!action) return usage.showDetails(ctx);
 			if (action === "setup" || action === "login") {
-				return setupManagement(ctx);
+				return setupManagement(ctx, {
+					settingsPath: SETTINGS_PATH,
+					legacySettingsPath: LEGACY_SETTINGS_PATH,
+					providerConfigPath: PROVIDER_CONFIG_PATH,
+				}, async (settings) => {
+					usage.resetSettings(settings, ctx);
+					await usage.refreshCurrent(ctx, { notify: true, force: true });
+				});
 			}
 			if (action === "logout") return clearManagement(ctx);
 			if (action === "settings") {
