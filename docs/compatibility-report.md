@@ -98,3 +98,29 @@ An inspection helper also assumed npm pack JSON was an array. npm 12 returned an
 Not verified by this smoke: real provider accounts, setup/password masking, logout races, reload/session replacement races, arbitrary narrow widths, actual theme changes, other operating systems/terminals, RPC/JSON/print behavior, or timer completeness. Batches A–E retain their own regression requirements.
 
 The runtime is ready for batch A on the verified SDK baselines; no new minimum-version promise or broad peer range change is warranted. Parser correctness is tracked separately in [issue #14](https://github.com/Zigerry/cliproxy-usage/issues/14). This report does not claim delivery of the subsequent cache, state, refresh or UI changes.
+
+## Issue #46 follow-up — Pi 1.4.0
+
+This adds evidence for `1.4.0` without replacing the historical `0.80.10` / `1.3.0` results above. Host tools: Linux, Node.js `22.23.2`, npm `12.2.0`, Python `3.12.3`, pexpect `4.9.0`. The checkout retains its original SDK baseline, peer ranges and lockfile (including the previous dependency-tree size optimization); no runtime source or smoke framework changes were needed.
+
+Disposable workspace: `/tmp/cliproxy-46-FHLp1o`, with the project in `current/` and command logs, PTY transcripts, events and results in `evidence/`. In that copy only, installation used:
+
+```bash
+npm install --ignore-scripts --save-dev --save-exact \
+  @earendil-works/pi-agent-core@1.4.0 @earendil-works/pi-ai@1.4.0 \
+  @earendil-works/pi-coding-agent@1.4.0 @earendil-works/pi-tui@1.4.0
+npm run check && npm test && npm pack --dry-run
+```
+
+`npm ls` confirmed all four SDK packages aligned at `1.4.0`. Both this copy and the worktree (installed with the original lock via `npm ci --ignore-scripts`) passed types and packaging (18 files, LICENSE included), with **354 tests passed, 0 failed, 1 skipped** each. The skipped test is the actual release shell drill, requiring native Node.js 24; the main PR must run the Node 24 CI jobs before treating release-flow coverage as complete. Remote CI was not run here.
+
+The existing smoke ran unchanged from the worktree:
+
+```bash
+python3 test/compatibility/smoke.py current regular /tmp/cliproxy-46-FHLp1o
+python3 test/compatibility/smoke.py current fullscreen /tmp/cliproxy-46-FHLp1o
+```
+
+Both `1.4.0` PTY runs passed the bounded assertions listed above (including the updated details row, settings, model switching and orderly shutdown), at 120 × 40 with `xterm-256color`. Each recorded two synthetic quota calls, zero unexpected network attempts and exit status 0. The isolated HOME/agent/cwd and guards were retained; no personal configuration, credentials or live provider requests were used. This is manual synthetic PTY evidence, distinct from CI types/unit/package checks, and does not extend the report's untested scenarios or promise compatibility with other versions.
+
+CI and publish compatibility matrices now retain the two older versions and append `1.4.0`; publish's isolated override also applies to the new version. `git diff --check` passed. No repository package manifests, lock metadata or release implementation changed.

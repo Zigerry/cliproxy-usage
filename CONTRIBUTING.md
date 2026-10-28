@@ -34,7 +34,7 @@ npm pack --dry-run
 
 Add or update tests for behavior changes and bug fixes. Tests belong in `test/`, use TypeScript and `node:test`, and must not depend on real credentials or provider requests.
 
-CI checks the locked Pi SDK (`0.80.10`) and `1.3.0` in separate jobs. The latter changes only its job-local installation; keep the repository lockfile unchanged unless an SDK upgrade is intentional. Keep all four SDK packages aligned in that isolated override, even though only two are direct development dependencies. Local Node.js 22 runs skip the release shell drill, which requires native Node.js 24; use Node.js 24 for full CI-equivalent test coverage. For isolated PTY checks with synthetic accounts and network guards, see [the compatibility report](docs/compatibility-report.md). Python with `pexpect` is optional developer tooling for that manual check, not an extension dependency.
+CI checks types, unit tests and packaging with the locked Pi SDK (`0.80.10`), `1.3.0` and `1.4.0` in separate jobs. Non-locked versions change only their job-local installation; keep the repository lockfile unchanged unless an SDK upgrade is intentional. Keep all four SDK packages aligned in that isolated override, even though only two are direct development dependencies. Local Node.js 22 runs skip the release shell drill, which requires native Node.js 24; use Node.js 24 for full CI-equivalent test coverage. These automated checks do not verify terminal interaction. For separate, isolated PTY checks with synthetic accounts and network guards, see [the compatibility report](docs/compatibility-report.md). Python with `pexpect` is optional developer tooling for that manual check, not an extension dependency.
 
 ## Git workflow
 

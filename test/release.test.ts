@@ -203,7 +203,10 @@ test("workflow wiring: one orchestrator, isolated SDK checks, draft before tgz p
   const bump = readFileSync(new URL("../.github/workflows/bump-version.yml", import.meta.url), "utf8");
   assert.throws(() => readFileSync(new URL("../.github/workflows/release.yml", import.meta.url)));
   assert.match(publish, /group: production-release/); assert.match(publish, /cancel-in-progress: false/);
-  assert.match(publish, /\["0.80.10", "1.3.0"\]/); assert.match(publish, /needs:.*test/);
+  assert.match(publish, /\["0.80.10", "1.3.0", "1.4.0"\]/); assert.match(publish, /needs:.*test/);
+  assert.match(publish, /if \[ "\$SDK_VERSION" != 0\.80\.10 \]; then/);
+  const ci = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  assert.match(ci, /pi: \[locked, "1.3.0", "1.4.0"\]/);
   assert.match(publish, /ref: \$\{\{ github.ref \}\}/); assert.doesNotMatch(publish, /ref:.*inputs.tag/);
   assert.match(publish, /npm install --global npm@12.2.0/);
   assert.match(publish, /gh --version/);
