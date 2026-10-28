@@ -68,7 +68,7 @@ Unsupported model families hide the widget and do not open a usage view.
 - CLIProxyAPI Management API access
 - The password accepted by CLIProxyAPI's `management.html`
 
-Verified Pi versions: `0.80.10` (regular TUI) and `1.3.0` (regular and fullscreen TUI), using synthetic account data. This is not a claim that every intervening or newer release has been tested. No other Pi plugin is required.
+Verified Pi versions: `0.80.10` (regular TUI) and `1.3.0` / `1.4.0` (regular and fullscreen TUI), using synthetic account data. CI types/unit/package checks are separate from these manual PTY checks; see the [compatibility report](docs/compatibility-report.md) for scope and evidence. This is not a claim that every intervening or newer release has been tested. No other Pi plugin is required.
 
 ## Install
 
