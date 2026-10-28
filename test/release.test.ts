@@ -7,7 +7,7 @@ import test from "node:test";
 import { gzipSync } from "node:zlib";
 import {
   validateSource, inspectArtifact, releaseRecord, publicationPlan,
-  registryVersion, registryLatest, verifyRegistry, githubState, githubReleaseId,
+  registryVersion, registryLatest, verifyRegistry, verifyLatest, REPLICATION_ATTEMPTS, githubState, githubReleaseId,
   type Identity, type SourceInput,
 } from "../scripts/release.js";
 
@@ -137,6 +137,107 @@ test("postpublish replication retries are bounded, only missing is retried, no b
   calls = 0;
   await assert.rejects(verifyRegistry(identity, bytes, { attempts: 3, sleep: async () => {}, fetcher: async () => { calls++; return json({}, 503); } }));
   assert.equal(calls, 1);
+});
+
+function fakeReplication() {
+  let elapsed = 0;
+  const waits: number[] = [];
+  return { attempts: REPLICATION_ATTEMPTS, now: () => elapsed,
+    sleep: async (ms: number) => { waits.push(ms); elapsed += ms; },
+    advance: (ms: number) => { elapsed += ms; }, waits };
+}
+const recovery = /npm may already have accepted publication.*same tag.*do not republish or bump/;
+
+test("replication survives more than six delays and exhausts within three minutes without real sleep", async () => {
+  const clock = fakeReplication(); let calls = 0;
+  await verifyRegistry(identity, bytes, { ...clock, fetcher: async url => {
+    if (!String(url).endsWith(".tgz") && ++calls <= 8) return json({ error: "Not found" }, 404);
+    return mock()(url);
+  } });
+  assert.equal(calls, 9); assert.deepEqual(clock.waits, Array(8).fill(5000));
+  for (const verify of [verifyRegistry.bind(null, identity, bytes), verifyLatest.bind(null, identity)]) {
+    const clock = fakeReplication(); let calls = 0;
+    await assert.rejects(verify({ ...clock, fetcher: async url => {
+      calls++;
+      return String(url).endsWith("/latest") ? json({ ...manifest, version: "1.2.2" }) : json("version not found: 1.2.3", 404);
+    } }), recovery);
+    assert.equal(calls, 37); assert.equal(clock.now(), 180_000);
+    assert.deepEqual(clock.waits, Array(36).fill(5000));
+  }
+});
+
+test("HTTP time consumes the replication window and sleep overruns cannot start another request", async () => {
+  for (const verify of [verifyRegistry.bind(null, identity, bytes), verifyLatest.bind(null, identity)]) {
+    const clock = fakeReplication(); let calls = 0;
+    await assert.rejects(verify({ ...clock, fetcher: async url => {
+      calls++; clock.advance(30_000);
+      return String(url).endsWith("/latest") ? json({ ...manifest, version: "1.2.2" }) : json({ error: "Not found" }, 404);
+    } }), recovery);
+    assert.equal(calls, 6); assert.equal(clock.now(), 205_000);
+    assert.equal(clock.waits.length, 5);
+    calls = 0;
+    await assert.rejects(verify({ ...fakeReplication(), now: clock.now,
+      sleep: async () => { clock.advance(180_001); }, fetcher: async url => {
+        calls++;
+        return String(url).endsWith("/latest") ? json({ ...manifest, version: "1.2.2" }) : json({ error: "Not found" }, 404);
+      } }), recovery);
+    assert.equal(calls, 1);
+  }
+});
+
+test("latest catches up after extended lag but ahead, rollback and unsafe metadata fail immediately", async () => {
+  const clock = fakeReplication(); let calls = 0;
+  assert.equal(await verifyLatest(identity, { ...clock, fetcher: async () => {
+    calls++; return json({ ...manifest, version: calls <= 8 ? "1.2.2" : identity.version });
+  } }), identity.version);
+  assert.equal(calls, 9); assert.equal(clock.waits.length, 8);
+  const rollback = fakeReplication(); calls = 0;
+  await assert.rejects(verifyLatest(identity, { ...rollback, fetcher: async () => {
+    calls++; return json({ ...manifest, version: calls === 1 ? "1.2.2" : "1.2.1" });
+  } }), /rolled back/);
+  assert.equal(calls, 2); assert.equal(rollback.waits.length, 1);
+  for (const response of [
+    () => json({ ...manifest, version: "2.0.0" }),
+    () => json({ ...manifest, version: "1.2.3-rc.1" }),
+    () => json({ ...manifest, name: "other" }), () => json({}),
+    () => json({ error: "Not found" }, 404),
+    () => new Response("not json", { headers: { "content-type": "application/json" } }),
+    ...[401, 403, 429, 500, 503].map(status => () => json({}, status)),
+    () => { throw new Error("network"); },
+  ]) {
+    const clock = fakeReplication(); let calls = 0;
+    await assert.rejects(verifyLatest(identity, { ...clock, fetcher: async () => { calls++; return response(); } }));
+    assert.equal(calls, 1); assert.equal(clock.waits.length, 0);
+  }
+});
+
+test("extended version wait never retries unsafe metadata, transport or artifact failures; default remains one read", async () => {
+  for (const fetcher of [
+    mock({ ...metadata, name: "other" }), mock({ ...metadata, version: "1.2.4" }),
+    mock({ ...metadata, dist: { ...metadata.dist, integrity: "sha512-wrong" } }),
+    mock({ ...metadata, gitHead: "b".repeat(40) }),
+    mock({ ...metadata, dist: { ...metadata.dist, tarball: "https://evil.test/a.tgz" } }),
+    mock(metadata, Buffer.from("wrong bytes")),
+    async () => json("version not found: 9.9.9", 404),
+    async () => new Response("not json", { headers: { "content-type": "application/json" } }),
+    async (url: Parameters<typeof fetch>[0]) => String(url).endsWith(".tgz") ? json({}, 503) : json(metadata),
+    ...[401, 403, 429, 500, 503].map(status => async () => json({}, status)),
+    async () => { throw new Error("network"); },
+  ] as (typeof fetch)[]) {
+    const clock = fakeReplication(); let calls = 0;
+    await assert.rejects(verifyRegistry(identity, bytes, { ...clock, fetcher: async (url, init) => { calls++; return fetcher(url, init); } }));
+    assert.ok(calls === 1 || calls === 2); assert.equal(clock.waits.length, 0);
+  }
+  let calls = 0;
+  await assert.rejects(verifyRegistry(identity, bytes, { fetcher: async () => { calls++; return json({ error: "Not found" }, 404); } }), recovery);
+  assert.equal(calls, 1);
+  const clock = fakeReplication();
+  await assert.rejects(verifyLatest(identity, { ...clock, attempts: 3, fetcher: mock({ ...manifest, version: "1.2.2" }) }), recovery);
+  assert.equal(clock.waits.length, 2);
+  for (const attempts of [0, -1, 1.5, REPLICATION_ATTEMPTS + 1]) {
+    await assert.rejects(verifyRegistry(identity, bytes, { attempts, fetcher: mock() }), /Invalid retry bound/);
+    await assert.rejects(verifyLatest(identity, { attempts, fetcher: mock() }), /Invalid retry bound/);
+  }
 });
 
 test("new publication cannot downgrade latest; verified historical reruns cannot move latest", () => {

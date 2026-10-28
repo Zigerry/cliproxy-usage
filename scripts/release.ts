@@ -125,17 +125,30 @@ export function publicationPlan(existing: boolean, version: string, latest: stri
   requireThat(existing || order > 0, "New publication must be newer than npm latest");
   return { publish: !existing };
 }
-interface VerifyOptions { fetcher?: Fetcher; attempts?: number; sleep?: (ms: number) => Promise<void> }
+// Each replication phase has a three-minute retry-start window, not a generic
+// HTTP retry policy. A request already started still has its own 30s HTTP budget.
+export const REPLICATION_ATTEMPTS = 37;
+const REPLICATION_WINDOW_MS = 180_000;
+interface VerifyOptions { fetcher?: Fetcher; attempts?: number; sleep?: (ms: number) => Promise<void>; now?: () => number }
 const sleep = (ms: number) => new Promise<void>(done => setTimeout(done, ms));
+function replicationWait(options: VerifyOptions, subject: string): () => Promise<void> {
+  const { attempts = 1, sleep: wait = sleep, now = () => performance.now() } = options;
+  requireThat(Number.isInteger(attempts) && attempts >= 1 && attempts <= REPLICATION_ATTEMPTS, "Invalid retry bound");
+  const started = now(); let reads = 1;
+  const exhausted = `${subject} after bounded verification; npm may already have accepted publication. Investigate and rerun Publish at the same tag for full verification; do not republish or bump the version.`;
+  return async () => {
+    requireThat(reads < attempts && now() - started + 5000 <= REPLICATION_WINDOW_MS, exhausted);
+    await wait(5000);
+    requireThat(now() - started <= REPLICATION_WINDOW_MS, exhausted);
+    reads++;
+  };
+}
 export async function verifyRegistry(identity: Identity, bytes: Buffer, options: VerifyOptions = {}): Promise<void> {
-  const { fetcher = fetch, attempts = 1, sleep: wait = sleep } = options;
-  requireThat(Number.isInteger(attempts) && attempts >= 1 && attempts <= 6, "Invalid retry bound");
-  for (let i = 0; i < attempts; i++) {
+  const { fetcher = fetch } = options;
+  const wait = replicationWait(options, "Version missing");
+  for (;;) {
     const body = await registryVersion(identity, fetcher);
-    if (!body) {
-      requireThat(i + 1 < attempts, "Version missing after bounded verification");
-      await wait(5000); continue;
-    }
+    if (!body) { await wait(); continue; }
     const dist = object(body.dist);
     requireThat(dist.integrity === sha512(bytes), "Registry SHA512 mismatch");
     requireThat(body.gitHead === undefined || body.gitHead === identity.commit, "Registry gitHead mismatch");
@@ -145,6 +158,22 @@ export async function verifyRegistry(identity: Identity, bytes: Buffer, options:
     requireThat(response.status === 200, `Registry tarball HTTP ${response.status}`);
     requireThat(Buffer.from(await response.arrayBuffer()).equals(bytes), "Registry tarball bytes differ");
     return;
+  }
+}
+
+// Only an older stable latest can be replication lag for a new publication.
+// Advancing past the target or moving backwards is unsafe, never a wait condition.
+export async function verifyLatest(identity: Identity, options: VerifyOptions = {}): Promise<string> {
+  const { fetcher = fetch } = options;
+  const wait = replicationWait(options, "Published npm latest pointer not verified");
+  let previous: string | undefined;
+  for (;;) {
+    const latest = await registryLatest(fetcher);
+    requireThat(previous === undefined || compare(latest, previous) >= 0, "npm latest pointer rolled back");
+    requireThat(compare(latest, identity.version) <= 0, "npm latest pointer is ahead of publication");
+    if (latest === identity.version) return latest;
+    previous = latest;
+    await wait();
   }
 }
 
@@ -300,16 +329,11 @@ async function main(): Promise<void> {
     output("publish", plan.publish); return;
   }
   if (command === "verify") {
-    await verifyRegistry(identity, local.bytes, { attempts: 6 });
-    let latest = await registryLatest();
-    // A new publication must also have its npm latest pointer replicated. Never
-    // repair/promote a historical rerun with npm dist-tag commands.
-    if (env("EXPECT_PUBLISH") === "true") {
-      for (let i = 1; latest !== identity.version && compare(latest, identity.version) < 0 && i < 6; i++) {
-        await sleep(5000); latest = await registryLatest();
-      }
-      requireThat(latest === identity.version, "Published npm latest pointer not verified");
-    }
+    await verifyRegistry(identity, local.bytes, { attempts: REPLICATION_ATTEMPTS });
+    // Historical reruns only read latest; they must never promote it.
+    const latest = env("EXPECT_PUBLISH") === "true"
+      ? await verifyLatest(identity, { attempts: REPLICATION_ATTEMPTS })
+      : await registryLatest();
     output("latest", latest === identity.version); return;
   }
   if (command === "gh-probe") {

@@ -64,9 +64,19 @@ than treating this as a durable release queue.
    intervening publication stops for a fully verified rerun. A secret's presence
    does not establish its validity.
 7. After publication (or a verified rerun), verify registry metadata and actual
-   bytes again. Missing metadata is retried at most six times, five seconds
-   apart; transient latest-pointer replication is bounded similarly. Other
-   failures stop rather than being treated as absence. A new publication's npm
+   bytes again. Only recognized version absence is retried, with up to 37 reads
+   five seconds apart within a three-minute retry-start window. A new publication's older
+   stable latest pointer uses the same policy in a separate phase; a pointer
+   ahead of the target or observed moving backwards fails immediately. Existing
+   versions in the initial planning gate remain single-read/fail-fast. HTTP time
+   counts against each window; a started request retains its 30-second budget,
+   so each phase can take up to 210 seconds, not merely 180 seconds of wall time.
+   Version verification can additionally download the tarball (up to 30 seconds);
+   both phases together can therefore take up to 450 seconds, excluding local
+   processing/scheduling overhead. With immediate responses, each phase sleeps
+   at most 180 seconds. Other network/HTTP, malformed metadata, identity, integrity
+   or tarball failures stop immediately rather than being retried or treated as
+   absence. A new publication's npm
    latest must be verified. The draft's downloaded assets/record are checked
    again before making it public. Finalization preserves generated or maintainer-edited
    release notes rather than replacing them with a generic success line. `--latest=false` keeps a historical retry from
@@ -98,7 +108,9 @@ Publish recovery at that tag; do not run Bump again to repair dispatch.
 There is no npm/GitHub transaction. A draft with the exact tarball/record is the
 recovery anchor, not a declaration of success. If npm fails, leave the draft
 unpublished. If npm succeeds but verification or GitHub fails, stop and rerun
-Publish at the same tag after investigation. Never unpublish/reuse a version as
+Publish at the same tag after investigation. A replication timeout may mean
+npm already accepted the publication: use that same-tag fully verified rerun,
+not another publish attempt or version bump. Never unpublish/reuse a version as
 rollback, move a tag, replace assets, or publish different bytes to "repair" it.
 The rerun re-packs with the pinned toolchain and must reproduce the stored and
 registry bytes. A transport/CDN tarball read error stops rather than expanding the

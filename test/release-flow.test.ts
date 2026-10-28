@@ -70,7 +70,7 @@ function executable(name: string): string {
 // Even an unexpected URL/tool command fails closed; no host configs are inherited.
 const guard = String.raw`
 import assert from 'node:assert/strict';
-import { readFileSync, appendFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { syncBuiltinESMExports } from 'node:module';
 import net from 'node:net';
@@ -92,6 +92,17 @@ export function log(kind, args = []) {
   const hash = createHash('sha256').update(JSON.stringify(entry)).digest('hex');
   appendFileSync(file, JSON.stringify({ ...entry, hash }) + '\n');
 }
+// Only the isolated preload accelerates the helper's real five-second sleeps.
+// Advance its monotonic clock too, so the production deadline is still exercised.
+if (process.env.FIXTURE_MODE === 'flow') {
+  let elapsed = 0;
+  Object.defineProperty(performance, 'now', { value: () => elapsed });
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (callback, ms, ...args) => {
+    if (ms === 5000) { elapsed += ms; log('sleep', [String(ms)]); return realSetTimeout(callback, 0, ...args); }
+    return realSetTimeout(callback, ms, ...args);
+  };
+}
 globalThis.fetch = async (url, init) => {
   assert.equal(process.env.FIXTURE_MODE, 'flow', 'No fetch during local pack');
   const prefix = 'https://registry.npmjs.org/cliproxy-usage';
@@ -102,6 +113,11 @@ globalThis.fetch = async (url, init) => {
   log('fetch', [path]);
   const state = JSON.parse(readFileSync(process.env.FIXTURE_STATE, 'utf8'));
   const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
+  const lagKey = path === prefix + '/latest' ? 'olderLatestReads' : path === prefix + '/1.2.3' ? 'missingVersionReads' : undefined;
+  if (lagKey && state[lagKey] > 0) {
+    state[lagKey]--; writeFileSync(process.env.FIXTURE_STATE, JSON.stringify(state));
+    return lagKey === 'olderLatestReads' ? json({ name: 'cliproxy-usage', version: '1.2.2' }) : json('version not found: 1.2.3', 404);
+  }
   if (path === prefix + '/latest') return json({ name: 'cliproxy-usage', version: state.latest });
   if (path === prefix + '/1.2.3') return state.metadata ? json(state.metadata) : json('version not found: 1.2.3', 404);
   assert.ok(state.metadata, 'Unpublished tarball');
@@ -211,6 +227,7 @@ interface State {
   npmVersion: string; metadata: Metadata | null; registryBytes: string; latest: string; githubLatest: string;
   expectedMetadata: Metadata; expectedBytes: string; release: Release | null;
   createFailure?: boolean; publishFailure?: boolean; dirty?: boolean; offMain?: boolean;
+  missingVersionReads?: number; olderLatestReads?: number;
   listFailure?: number; partialListFailure?: boolean; laterPage?: boolean; duplicateDiscovery?: boolean; missingById?: boolean;
 }
 interface Event { n: number; prev: string; kind: string; args: string[]; hash: string }
@@ -471,6 +488,26 @@ test("actual release shell is fail-closed and recoverable against isolated GH/np
       // gate + plan + three staging probes + publish-gate + verify + final probe.
       assert.equal(gitCalls.filter(e => e.args[0] === "rev-parse" && e.args[1] === "HEAD").length, 8);
       assert.equal(gitCalls.filter(e => e.args[0] === "ls-files").length, 7);
+    });
+    await t.test("extended version and latest replication lag catches up without real sleeps", () => {
+      const f = fixture();
+      const result = f.run({ beforeStep: step => {
+        if (step === verify) f.update({ missingVersionReads: 8, olderLatestReads: 8 });
+      } });
+      assert.equal(result.failed, undefined, result.stderr);
+      assert.equal(count(f, "sleep"), 16); assert.equal(count(f, "npm.publish"), 1);
+      assert.equal(count(f, "gh.edit"), 1); assert.equal(f.outputs.verify.latest, "true");
+    });
+    for (const lag of ["missingVersionReads", "olderLatestReads"] as const) await t.test(`${lag} exhaustion preserves draft after accepted publication`, () => {
+      const f = fixture();
+      const result = f.run({ beforeStep: step => {
+        if (step === verify) f.update({ [lag]: 99 });
+      } });
+      assert.equal(result.failed, verify.name);
+      assert.match(result.stderr, /npm may already have accepted publication.*same tag.*do not republish or bump/);
+      assert.equal(count(f, "sleep"), 36); assert.equal(f.state()[lag], 62);
+      assert.equal(count(f, "npm.publish"), 1); assert.equal(count(f, "gh.edit"), 0);
+      assert.equal(f.state().release?.draft, true); assert.ok(!result.attempted.includes(finalize.name));
     });
     await t.test("registry byte mismatch after successful npm publication cannot finalize the draft", () => {
       const f = fixture();
