@@ -247,6 +247,29 @@ test("renderUsage switches between three, two, and one account columns", () => {
 	assert.equal(narrow.length, 4);
 });
 
+test("shared card packing caps wide rows at three and flushes around multiline cards", () => {
+	const items: AccountUsage[] = (["claude", "codex", "grok", "kimi"] as const).map((provider, index) => ({
+		provider, label: `account-${index}`,
+		windows: [{ label: "7d", used: 50 }],
+	}));
+	const renderItems = (accounts: AccountUsage[], width: number) => {
+		const { ctx, render } = createContext();
+		renderUsage(ctx, accounts, 4);
+		return render(width);
+	};
+	const cards = items.map((item) => renderItems([item], 1000));
+	assert.ok(cards.every((card) => card.length === 1));
+	assert.deepEqual(renderItems(items, 1000), [cards.slice(0, 3).flat().join("    "), ...cards[3]!]);
+
+	const mixed = items.slice(0, 3).map((item, index) => index === 1
+		? { ...item, windows: [{ label: "long-window-label-".repeat(4), used: 50 }] } : item);
+	const separate = mixed.map((item) => renderItems([item], 50));
+	assert.equal(separate[0]!.length, 1);
+	assert.ok(separate[1]!.length > 1);
+	assert.equal(separate[2]!.length, 1);
+	assert.deepEqual(renderItems(mixed, 50), separate.flat());
+});
+
 test("renderUsage respects terminal width for wide account labels", () => {
 	const { ctx, render } = createContext();
 	renderUsage(

@@ -7,7 +7,7 @@ import test, { type TestContext } from "node:test";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { UsageController } from "../src/controller.js";
 import { DEFAULT_SETTINGS, type LoadedSettings } from "../src/settings.js";
-import type { Settings } from "../src/types.js";
+import type { Settings, Theme, UsageSnapshot } from "../src/types.js";
 
 const START = Date.UTC(2030, 0, 1);
 type DisplaySettings = Settings & { showWidget: boolean };
@@ -67,6 +67,47 @@ async function harness(t: TestContext) {
 		set wait(value: boolean) { wait = value; }, set handler(value: typeof handler) { handler = value; },
 	};
 }
+
+test("widget account limit follows adopted settings immediately after reset, without a mirror", async (t) => {
+	const h = await harness(t);
+	const value: UsageSnapshot = {
+		provider: "codex", state: "ready", configuration: { status: "ready" },
+		refreshing: false, stale: false, partial: false, generatedAt: START,
+		accounts: Array.from({ length: 5 }, (_, index) => ({
+			provider: "codex", label: `account-${index}`, queried: true, result: "valid",
+			cached: false, stale: false, windows: [{ label: "7d", used: 50 }],
+		})),
+	};
+	// Reset clears real provider caches. Supply a detached read model here to
+	// isolate the presentation setting before another refresh can re-adopt it.
+	t.mock.method(h.controller, "getSnapshot", () => value);
+	const render = () => typeof h.widget === "function"
+		? (h.widget as (tui: unknown, theme: Theme) => { render(width: number): string[] })(undefined, h.ctx.ui.theme).render(240).join("\n") : "";
+	const limit = (visible: number) => {
+		const text = render();
+		for (let index = 0; index < 5; index++) assert.equal(text.includes(`account-${index}`), index < visible, text);
+		assert.match(text, new RegExp(`… ${5 - visible} more accounts?`));
+	};
+
+	h.settings.maxVisibleAccounts = 3;
+	h.controller.syncSettings(h.settings, h.ctx);
+	limit(3);
+	h.settings.maxVisibleAccounts = 1;
+	h.controller.resetSettings(h.settings, h.ctx);
+	limit(1);
+	h.settings.maxVisibleAccounts = 4;
+	h.controller.renderCurrentModel(h.ctx);
+	limit(1); // Caller mutation cannot change the adopted settings snapshot.
+
+	h.settings.showWidget = false;
+	await h.controller.applySettings(h.ctx, h.settings, "showWidget");
+	assert.equal(h.widget, undefined);
+	h.settings.showWidget = true;
+	h.settings.maxVisibleAccounts = 2;
+	await h.controller.applySettings(h.ctx, h.settings, "showWidget");
+	limit(2);
+	assert.equal(h.requests, 0);
+});
 
 test("visibility toggle preserves periodic anchor, cache and open details; hidden periodic HTTP continues", async (t) => {
 	t.mock.timers.enable({ apis: ["Date", "setTimeout", "setInterval"], now: START });

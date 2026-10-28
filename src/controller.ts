@@ -67,7 +67,6 @@ export class UsageController {
 	private operation: RefreshOperation | undefined;
 	private sourceBoundary: { source: ManagementSource; key: string } | undefined;
 	private readonly changeListeners = new Set<() => void>();
-	private maxVisibleAccounts = DEFAULT_SETTINGS.maxVisibleAccounts;
 	private settingsSnapshot: Settings = structuredClone(DEFAULT_SETTINGS);
 	private rejectedManagementKey: string | undefined;
 	private lastSettingsWarning: string | undefined;
@@ -95,6 +94,7 @@ export class UsageController {
 	}
 
 	private adoptSettings(settings: Settings, observedDisplayRevision?: number): void {
+		this.settingsKnown = true;
 		const next = structuredClone(settings);
 		next.refreshMinutes = effectiveRefreshMinutes(next.refreshMinutes);
 		if (observedDisplayRevision !== undefined && observedDisplayRevision !== this.displayRevision) {
@@ -269,7 +269,7 @@ export class UsageController {
 			return;
 		}
 		const snapshot = this.getSnapshot(ctx);
-		renderUsage(ctx, snapshot, this.maxVisibleAccounts);
+		renderUsage(ctx, snapshot, this.settingsSnapshot.maxVisibleAccounts);
 		this.scheduleExpiry(ctx, snapshot);
 	}
 
@@ -372,9 +372,7 @@ export class UsageController {
 		if (this.timer && loaded.settings.refreshMinutes !== this.settingsSnapshot.refreshMinutes) {
 			this.scheduleRefresh(this.refreshContext ?? request.ctx, loaded.settings.refreshMinutes);
 		}
-		this.settingsKnown = true;
 		this.adoptSettings(loaded.settings, request.displayRevision);
-		this.maxVisibleAccounts = loaded.settings.maxVisibleAccounts;
 		this.notifySettingsWarnings(request.ctx, loaded);
 		for (const provider of PROVIDERS) {
 			if (!loaded.settings.providers[provider]) this.clearProviderCache(provider);
@@ -601,9 +599,7 @@ export class UsageController {
 		this.rejectedManagementKey = undefined;
 		this.lastSettingsWarning = undefined;
 		this.active = true;
-		this.settingsKnown = true;
 		this.adoptSettings(loaded.settings);
-		this.maxVisibleAccounts = loaded.settings.maxVisibleAccounts;
 		this.scheduleRefresh(ctx, loaded.settings.refreshMinutes);
 		this.reportBackgroundError(ctx, this.refreshCurrent(ctx, { loaded }));
 	}
@@ -658,9 +654,7 @@ export class UsageController {
 		const displayOnly = changedId === "showWidget" && !sourceChanged && !changedProviders.length &&
 			settings.refreshMinutes === this.settingsSnapshot.refreshMinutes;
 		if (displayOnly) {
-			this.settingsKnown = true;
 			this.adoptSettings(settings);
-			this.maxVisibleAccounts = settings.maxVisibleAccounts;
 			this.publish(ctx);
 			return;
 		}
@@ -672,9 +666,7 @@ export class UsageController {
 			this.rejectedManagementKey = undefined;
 		}
 		for (const provider of changedProviders) if (!settings.providers[provider]) this.clearProviderCache(provider);
-		this.settingsKnown = true;
 		this.adoptSettings(settings);
-		this.maxVisibleAccounts = settings.maxVisibleAccounts;
 		this.scheduleRefresh(ctx, settings.refreshMinutes);
 		this.publish(ctx);
 		const provider = this.providerForContext(ctx);
@@ -687,7 +679,6 @@ export class UsageController {
 		this.invalidateWork(ctx);
 		if (ctx && this.timer) this.refreshContext = ctx;
 		else if (!ctx) this.clearRefreshTimer();
-		this.settingsKnown = true;
 		this.adoptSettings(settings);
 		this.clearAllCaches();
 		this.sourceBoundary = undefined;
@@ -710,9 +701,7 @@ export class UsageController {
 			this.rejectedManagementKey = undefined;
 		}
 		for (const provider of PROVIDERS) if (!settings.providers[provider]) this.clearProviderCache(provider);
-		this.settingsKnown = true;
 		this.adoptSettings(settings, observedDisplayRevision);
-		this.maxVisibleAccounts = settings.maxVisibleAccounts;
 		if (ctx) this.renderCurrentModel(ctx);
 		this.emitChange();
 	}
