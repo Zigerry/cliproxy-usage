@@ -92,7 +92,7 @@ Then reload Pi and configure Management API access:
 /cliproxy-usage
 ```
 
-Enter the same password used by CLIProxyAPI's `management.html`. The password is validated before it is saved.
+In an interactive TUI session, setup asks for a Management URL if none can be inferred or the configured URL is invalid, then asks for the same password used by CLIProxyAPI's `management.html`. Valid inferred URLs need no extra prompt and remain automatic. The URL and password are saved only after successful validation; cancelling leaves settings unchanged.
 
 ### Update
 
@@ -176,7 +176,7 @@ Settings are stored at `<getAgentDir()>/pi-cliproxy-usage.json`, normally:
 
 Use `/cliproxy-usage settings` instead of editing the file manually. Legacy extension settings migrate automatically when the canonical file does not exist. `refreshMinutes` accepts whole minutes from 1 through 35791 (the native timer limit); invalid or larger values use the 5-minute default with a warning.
 
-`managementUrl` is normally empty, which reuses the `baseUrl` from `<getAgentDir()>/cliproxyapi.json` (normally `~/.pi/agent/cliproxyapi.json`). Set an override only when inference and Management API traffic use different addresses. Root URLs, `/v1` URLs, and trailing `/v0/management` paths are normalized automatically.
+`managementUrl` is normally empty, which reuses the `baseUrl` from `<getAgentDir()>/cliproxyapi.json` (normally `~/.pi/agent/cliproxyapi.json`). Set an override only when inference and Management API traffic use different addresses. Only HTTP(S) URLs without embedded credentials (`user:password@host`) are accepted. Root URLs, `/v1` URLs, IPv6 addresses, path prefixes, and trailing `/v0/management` paths are normalized automatically.
 
 The management password is stored in the settings file with mode `0600`. Status output never prints it.
 

@@ -134,3 +134,46 @@ test("real settings keyboard rolls widget visibility back after atomic rename fa
 		await rm(dir, { recursive: true, force: true });
 	}
 });
+
+test("settings URL editor rejects unsafe URL, permits correction, and can return to automatic", { timeout: 5000 }, async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-cliproxy-url-ui-"));
+	const path = join(dir, "settings.json");
+	const legacy = join(dir, "old.json");
+	const host = settingsHost();
+	let applied = deferred<void>();
+	let screen: Component | undefined;
+	let showing: Promise<void> | undefined;
+	try {
+		await writeFile(path, JSON.stringify({ managementUrl: "https://hidden-user:hidden-pass@proxy.example", managementKey: "saved-password" }));
+		const before = await readFile(path, "utf8");
+		showing = showSettings(host.ctx, path, legacy, async () => { applied.resolve(); });
+		screen = await host.ready;
+		assert.doesNotMatch(render(screen), /hidden-user|hidden-pass|saved-password/);
+		for (const character of "management") screen.handleInput!(character);
+		screen.handleInput!("\r");
+		assert.doesNotMatch(render(screen), /hidden-user|hidden-pass/);
+		screen.handleInput!("ftp://proxy.example");
+		screen.handleInput!("\r");
+		assert.match((await host.notified).message, /valid HTTP\(S\) URL without embedded credentials/);
+		assert.equal(await readFile(path, "utf8"), before);
+		screen.handleInput!("\x15"); // ctrl-u clears invalid entry for correction
+		screen.handleInput!("http://[::1]:8317/prefix/v1/");
+		screen.handleInput!("\r");
+		await applied.promise;
+		assert.equal((await loadSettings(path, legacy)).settings.managementUrl, "http://[::1]:8317/prefix");
+		applied = deferred<void>();
+		screen.handleInput!("\r");
+		screen.handleInput!("\x05"); // ctrl-e: prefilled Input starts at column zero
+		screen.handleInput!("\x15");
+		screen.handleInput!("\r");
+		await applied.promise;
+		assert.equal((await loadSettings(path, legacy)).settings.managementUrl, "");
+		assert.equal((await loadSettings(path, legacy)).settings.managementKey, "saved-password");
+		screen.handleInput!("\x1b");
+		await showing;
+	} finally {
+		screen?.handleInput?.("\x1b");
+		await showing;
+		await rm(dir, { recursive: true, force: true });
+	}
+});

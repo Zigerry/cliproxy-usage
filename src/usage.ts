@@ -75,9 +75,12 @@ export class ManagementHttpError extends RequestError {
 	}
 }
 
-function normalizedBaseUrl(value: string): string | undefined {
+export function normalizedBaseUrl(value: string): string | undefined {
 	try {
 		const url = new URL(value.trim());
+		if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) {
+			return undefined;
+		}
 		url.pathname = url.pathname
 			.replace(/\/+$/, "")
 			.replace(/\/v0\/management$/i, "")

@@ -11,6 +11,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { PROVIDERS, PROVIDER_LABELS } from "./providers.js";
 import { loadSettings, saveSettings } from "./settings.js";
+import { normalizedBaseUrl } from "./usage.js";
 import type { ProviderName, Settings } from "./types.js";
 
 const providerIds = new Set<ProviderName>(PROVIDERS);
@@ -77,7 +78,7 @@ export async function promptManagementKey(
 }
 
 export function settingsSummary(settings: Settings, settingsPath: string): string {
-	return `Management URL: ${settings.managementUrl || "automatic"}\nManagement key: ${settings.managementKey ? "configured" : "run /cliproxy-usage setup"}\nWidget visibility: ${settings.showWidget ? "enabled" : "disabled"}\n${settingsPath}`;
+	return `Management URL: ${settings.managementUrl ? normalizedBaseUrl(settings.managementUrl) || "invalid URL" : "automatic"}\nManagement key: ${settings.managementKey ? "configured" : "run /cliproxy-usage setup"}\nWidget visibility: ${settings.showWidget ? "enabled" : "disabled"}\n${settingsPath}`;
 }
 
 function errorMessage(error: unknown): string {
@@ -86,7 +87,7 @@ function errorMessage(error: unknown): string {
 
 function settingValue(settings: Settings, id: string): string {
 	if (id === "showWidget") return settings.showWidget ? "enabled" : "disabled";
-	if (id === "managementUrl") return settings.managementUrl || "automatic";
+	if (id === "managementUrl") return settings.managementUrl ? normalizedBaseUrl(settings.managementUrl) || "invalid URL" : "automatic";
 	if (id === "refreshMinutes") return String(settings.refreshMinutes);
 	if (id === "maxVisibleAccounts") {
 		return String(settings.maxVisibleAccounts);
@@ -133,11 +134,18 @@ export async function showSettings(
 				id: "managementUrl",
 				label: "Management URL override",
 				description: "Empty uses the base URL from cliproxyapi.json",
-				currentValue: settings.managementUrl || "automatic",
+				currentValue: settingValue(settings, "managementUrl"),
 				submenu: (_currentValue, close) => {
 					const input = new Input();
-					input.setValue(settings.managementUrl);
-					input.onSubmit = (value) => close(value.trim() || "automatic");
+					input.setValue(normalizedBaseUrl(settings.managementUrl) || "");
+					input.onSubmit = (value) => {
+						const url = value.trim() ? normalizedBaseUrl(value) : "";
+						if (url === undefined) {
+							ctx.ui.notify("Enter a valid HTTP(S) URL without embedded credentials.", "error");
+							return;
+						}
+						close(url || "automatic");
+					};
 					input.onEscape = () => close(undefined);
 					return input;
 				},
