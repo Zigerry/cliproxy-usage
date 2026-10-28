@@ -5,7 +5,7 @@ import type { Theme as PiTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, type TUI } from "@earendil-works/pi-tui";
 import { UsageDetailsComponent } from "../src/details-ui.js";
 import { applyProviderRead, deriveUsageSnapshot } from "../src/state.js";
-import { layoutBalance, layoutQuotaWindow, renderUsage } from "../src/ui.js";
+import { layoutBalance, layoutQuotaWindow, layoutQuotaWindows, renderUsage } from "../src/ui.js";
 import type { AccountUsageSnapshot, Theme, UiContext, UsageSnapshot } from "../src/types.js";
 
 const now = Date.UTC(2030, 0, 1);
@@ -180,6 +180,46 @@ test("pure field layouts return complete atomic fields or explicit omission, inc
 		if (text.includes("123")) assert.equal(text, amount);
 		else if (width) { assert.match(text, /balance omitted|…/); assert.doesNotMatch(text, /\d/); }
 		else assert.deepEqual(lines, []);
+	}
+});
+
+// Independent pre-refactor field-packing oracle. Keep complete fields, including
+// oversize omission markers, and measure each ANSI-styled separator as before.
+function sequentialFields(fields: readonly string[], width: number, separator: string): string[] {
+	const lines: string[] = [];
+	for (const field of fields) {
+		const previous = lines.at(-1);
+		if (previous !== undefined && visibleWidth(previous) + visibleWidth(separator) + visibleWidth(field) <= width) {
+			lines[lines.length - 1] = previous + separator + field;
+		} else lines.push(field);
+	}
+	return lines;
+}
+
+test("shared packing preserves the former quota and balance field layout at every width", () => {
+	const plainTheme: Theme = { fg: (_color, text) => text };
+	const windows = [
+		{ label: "7d", used: 0 }, { label: "5h", used: 100 },
+		{ label: "中文👩‍💻é-long-window", used: 71 },
+	];
+	const balance = { available: false, amounts: [
+		{ currency: "USD", amount: 0 }, { currency: "EUR", amount: -1234.56 },
+		{ currency: "CNY", amount: 12.34 }, { currency: "JPY", amount: 56.78 },
+	] };
+	for (let width = 0; width <= 120; width++) {
+		const amounts = ["$0.00", "€-1234.56", "¥12.34 CNY", "¥56.78 JPY"].map((field) =>
+			visibleWidth(field) <= width ? theme.fg("error", field)
+				: theme.fg("dim", width >= 17 ? "[balance omitted]" : "…"));
+		assert.deepEqual(layoutBalance(balance, width, theme), width ? sequentialFields(amounts, width, theme.fg("dim", " / ")) : []);
+		for (const count of [0, 1, 3]) for (const barWidth of [0, 4, 6, 8]) {
+			const selected = windows.slice(0, count);
+			const candidates = [8, 6, 4, 0].filter((size) => size <= barWidth).map((size) => ({ size,
+				lines: sequentialFields(selected.flatMap((window) => layoutQuotaWindow(window, width, plainTheme, size)), width, " │ "),
+			}));
+			candidates.sort((a, b) => a.lines.length - b.lines.length);
+			const expected = sequentialFields(selected.flatMap((window) => layoutQuotaWindow(window, width, theme, candidates[0]!.size)), width, theme.fg("dim", " │ "));
+			assert.deepEqual(layoutQuotaWindows(selected, width, theme, barWidth), expected, `${width} columns / ${count} windows / ${barWidth} bar`);
+		}
 	}
 });
 

@@ -16,6 +16,9 @@ import type {
 	UsageSnapshot,
 } from "./types.js";
 
+const plainTheme: Theme = { fg: (_color, text) => text };
+const barWidths = [8, 6, 4, 0];
+
 /** Remaining quota in percent, clamped to 0-100. */
 export function remainingPercent(window: Readonly<UsageWindow>): number {
 	return Math.max(0, Math.min(100, 100 - window.used));
@@ -91,7 +94,7 @@ export function layoutQuotaWindow(
 	const left = `left ${Math.round(remaining)}%`;
 	const minimum = `${window.label} ${left}`;
 	if (visibleWidth(minimum) > width) return [theme.fg("dim", omitted("quota", width))];
-	const size = [8, 6, 4, 0].find((size) => size <= barWidth && visibleWidth(minimum) + (size ? size + 1 : 0) <= width) ?? 0;
+	const size = barWidths.find((size) => size <= barWidth && visibleWidth(minimum) + (size ? size + 1 : 0) <= width) ?? 0;
 	const bar = usageBar(remaining, size);
 	const filled = bar.match(/^━*/)?.[0] ?? "";
 	const meter = size ? `${theme.fg(color, filled)}${theme.fg("dim", bar.slice(filled.length))} ` : "";
@@ -102,14 +105,29 @@ export function layoutQuotaWindow(
 	return [quota, theme.fg("dim", visibleWidth(reset) <= width ? reset : omitted("reset", width))];
 }
 
-function packFields(fields: readonly string[], width: number, separator: string): string[] {
+/** Pack atomic fields or single-line cards; multiline cards always stay together. */
+function packFields(
+	fields: readonly (string | readonly string[])[], width: number, separator: string,
+	maxPerRow = Infinity,
+): string[] {
 	const lines: string[] = [];
+	let row: string[] = [];
+	const flush = () => {
+		if (row.length) lines.push(row.join(separator));
+		row = [];
+	};
 	for (const field of fields) {
-		const previous = lines.at(-1);
-		if (previous !== undefined && visibleWidth(previous) + visibleWidth(separator) + visibleWidth(field) <= width) {
-			lines[lines.length - 1] = previous + separator + field;
-		} else lines.push(field);
+		if (typeof field !== "string" && field.length !== 1) {
+			flush();
+			lines.push(...field);
+			continue;
+		}
+		const next = typeof field === "string" ? field : field[0] ?? "";
+		if (row.length && (row.length >= maxPerRow ||
+			visibleWidth(row.join(separator)) + visibleWidth(separator) + visibleWidth(next) > width)) flush();
+		row.push(next);
 	}
+	flush();
 	return lines;
 }
 
@@ -117,9 +135,8 @@ function packFields(fields: readonly string[], width: number, separator: string)
 export function layoutQuotaWindows(
 	windows: readonly Readonly<UsageWindow>[], width: number, theme: Theme, barWidth = 8,
 ): string[] {
-	const plain: Theme = { fg: (_color, text) => text };
-	const candidates = [8, 6, 4, 0].filter((size) => size <= barWidth).map((size) => ({ size,
-		rows: packFields(windows.flatMap((window) => layoutQuotaWindow(window, width, plain, size)), width, " │ "),
+	const candidates = barWidths.filter((size) => size <= barWidth).map((size) => ({ size,
+		rows: packFields(windows.flatMap((window) => layoutQuotaWindow(window, width, plainTheme, size)), width, " │ "),
 	}));
 	const best = candidates.sort((a, b) => a.rows.length - b.rows.length)[0];
 	return packFields(windows.flatMap((window) => layoutQuotaWindow(window, width, theme, best?.size ?? 0)), width, theme.fg("dim", " │ "));
@@ -186,6 +203,14 @@ export function layoutBalance(balance: ReadonlyAccountBalance, width: number, th
 	const fields = balanceFields(balance).map((field) => visibleWidth(field) <= width
 		? theme.fg(unavailable ? "error" : "text", field) : theme.fg("dim", omitted("balance", width)));
 	return packFields(fields, width, theme.fg("dim", " / "));
+}
+
+/** Compact freshness and failure rows; details keep their additional age/query facts. */
+function accountAnnotations(item: AccountUsageSnapshot): string[] {
+	return [
+		[item.incomplete ? "partial data" : "", item.cached ? "cached" : "", item.stale ? "stale" : ""].filter(Boolean).join(" · "),
+		item.error ? `error: ${item.error}` : item.result === "error" ? "error" : "",
+	].filter(Boolean);
 }
 
 function itemPriority(item: AccountUsageSnapshot): number {
@@ -354,7 +379,6 @@ export function renderUsage(
 			invalidate() {},
 			render(width: number): string[] {
 				if (width <= 0) return [];
-				const gap = 4;
 				const providers = new Set(visibleItems.map((item) => item.provider));
 				const groupedProvider =
 					providers.size === 1 && visibleItems.length > 1
@@ -362,7 +386,6 @@ export function renderUsage(
 						: undefined;
 				const styledProvider = (text: string) => theme.fg("text", text);
 				const labelLimit = visibleItems.length > 1 ? 18 : 24;
-				const plainTheme: Theme = { fg: (_color, text) => text };
 				const buildCards = (barWidth: number, styled: boolean): string[][] =>
 					visibleItems.map((item) => {
 						const paintTheme = styled ? theme : plainTheme;
@@ -379,14 +402,11 @@ export function renderUsage(
 							: item.balance ? layoutBalance(item.balance, budget, paintTheme)
 							: item.windows.length ? layoutQuotaWindows(item.windows, budget, paintTheme, size)
 							: [paint("dim", budget >= 7 ? (item.result === "error" ? "error" : "unknown") : omitted(item.result === "error" ? "error" : "unknown", budget))];
-						const annotations = [
-							...(item.incomplete ? ["partial data"] : []),
-							...(item.cached ? ["cached"] : []), ...(item.stale ? ["stale"] : []),
-							...(item.error ? [`error: ${item.error}`] : item.result === "error" ? ["error"] : []),
-						].join(" · ");
+						const annotationRows = accountAnnotations(item);
+						const annotations = annotationRows.join(" · ");
 						// Try a single row, shortening identity before meters. Never fit by
 						// cutting a completed quota/balance row or its freshness annotation.
-						for (const size of [8, 6, 4, 0].filter((size) => size <= barWidth)) {
+						for (const size of barWidths.filter((size) => size <= barWidth)) {
 							const fullData = data(Number.MAX_SAFE_INTEGER, size).join(paint("dim", " │ "));
 							const content = fullData + (annotations ? paint(item.error ? "error" : "dim", ` · ${annotations}`) : "");
 							const identityBudget = width - visibleWidth(content) - 3;
@@ -399,24 +419,10 @@ export function renderUsage(
 						const indent = width >= 4 ? "  " : "";
 						const bodyWidth = width - visibleWidth(indent);
 						return [identity(width), ...data(bodyWidth).map((line) => indent + line),
-							...[[item.incomplete ? "partial data" : "", item.cached ? "cached" : "", item.stale ? "stale" : ""].filter(Boolean).join(" · "),
-								item.error ? `error: ${item.error}` : item.result === "error" ? "error" : ""]
-								.filter(Boolean).flatMap((text) => layoutProse(paint(item.error ? "error" : "dim", text), bodyWidth))
+							...annotationRows.flatMap((text) => layoutProse(paint(item.error ? "error" : "dim", text), bodyWidth))
 								.map((line) => indent + line)];
 					});
-				const packCards = (cards: string[][]): string[] => {
-					const rows: string[] = [];
-					let row: string[] = [];
-					const flush = () => { if (row.length) rows.push(row.join(" ".repeat(gap))); row = []; };
-					for (const card of cards) {
-						if (card.length !== 1) { flush(); rows.push(...card); continue; }
-						const next = card[0] ?? "";
-						if (row.length && (row.length >= 3 || visibleWidth(row.join(" ".repeat(gap))) + gap + visibleWidth(next) > width)) flush();
-						row.push(next);
-					}
-					flush();
-					return rows;
-				};
+				const packCards = (cards: string[][]) => packFields(cards, width, "    ", 3);
 				const candidates = [8, 6, 4].map((barWidth) => ({ barWidth, rows: packCards(buildCards(barWidth, false)) }));
 				candidates.sort((a, b) => a.rows.length - b.rows.length || b.barWidth - a.barWidth);
 				const rows = packCards(buildCards(candidates[0]?.barWidth ?? 8, true));

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import {
-	formatBalance, formatSnapshotDetails, formatUsageAge,
+	formatBalance, formatSnapshotDetails, formatUsageAge, layoutProse,
 	renderUsage, snapshotStatusText,
 } from "../src/ui.js";
 import type { AccountUsageSnapshot, Theme, UiContext, UsageSnapshot } from "../src/types.js";
@@ -66,6 +66,24 @@ test("refreshing retains stale/partial/error status and cached quota numbers", (
 	] });
 	assert.match(snapshotStatusText(mixed), /error/);
 	assert.match(snapshotStatusText(mixed), /partial/);
+});
+
+test("compact and multiline cards retain the same ordered freshness and failure fields", () => {
+	for (const result of ["valid", "error"] as const) for (const incomplete of [false, true]) {
+		for (const cached of [false, true]) for (const stale of [false, true]) for (const error of [undefined, "", "HTTP 503"]) {
+			const value = snapshot({ accounts: [account({ result, cached, stale, error,
+				...(incomplete ? { incomplete: true } : {}),
+				windows: [{ label: "7d", used: 0 }, { label: "5h", used: 100 }],
+			})] });
+			const freshness = [incomplete ? "partial data" : "", cached ? "cached" : "", stale ? "stale" : ""].filter(Boolean).join(" · ");
+			const failure = error ? `error: ${error}` : result === "error" ? "error" : "";
+			const fields = [freshness, failure].filter(Boolean);
+			const compact = widget(value, 400)!.at(-1)!;
+			assert.ok(compact.endsWith(`left 0%${fields.length ? ` · ${fields.join(" · ")}` : ""}`), compact);
+			const rows = fields.flatMap((field) => layoutProse(field, 28)).map((line) => `  ${line}`);
+			if (rows.length) assert.deepEqual(widget(value, 30)!.slice(-rows.length), rows);
+		}
+	}
 });
 
 test("cached balances including zero/negative remain visible with error annotations", () => {
