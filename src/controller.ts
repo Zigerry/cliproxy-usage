@@ -114,8 +114,18 @@ export class UsageController {
 	}
 
 	private providerForContext(ctx: ExtensionContext): ProviderName | undefined {
-		return ctx.model
-			? providerForModel(ctx.model.provider, ctx.model.id)
+		return this.activeProvider(ctx.model);
+	}
+
+	/**
+	 * Shared mapping for widgets, details, and model_select: the active model only
+	 * claims a provider's accounts when the configured proxy actually serves it.
+	 */
+	activeProvider(
+		model: { provider: string; id: string; baseUrl?: string } | undefined,
+	): ProviderName | undefined {
+		return model
+			? providerForModel(model.provider, model.id, model.baseUrl, this.sourceBoundary?.source)
 			: undefined;
 	}
 

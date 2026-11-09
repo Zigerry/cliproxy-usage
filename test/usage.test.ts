@@ -8,6 +8,7 @@ import {
 	providerForModel,
 	readAccounts,
 	resolveManagementSource,
+	servedByProxy,
 	validateManagementAccess,
 } from "../src/usage.js";
 import type { AccountUsage, Settings } from "../src/types.js";
@@ -381,6 +382,61 @@ test("providerForModel maps CLIProxyAPI model ids to account types", () => {
 		providerForModel("cliproxyapi", "deepseek-v4-pro"),
 		"deepseek",
 	);
+});
+
+test("providerForModel never claims accounts for models served elsewhere", () => {
+	const proxy = { managementUrl: "https://cpa.example.invalid" };
+	// A native provider of the same name is not the proxy's account.
+	assert.equal(
+		providerForModel("deepseek", "deepseek-flash", "https://api.deepseek.com", proxy),
+		undefined,
+	);
+	assert.equal(
+		providerForModel("router", "deepseek-flash", "https://cpa.example.invalid/v1", proxy),
+		"deepseek",
+	);
+	assert.equal(
+		providerForModel("router", "claude-sonnet-4-6", "https://CPA.example.invalid/v1/", proxy),
+		"claude",
+	);
+	// Inference and management may live on different hosts of one instance.
+	const split = {
+		providerBaseUrl: "https://gateway.example.invalid",
+		managementUrl: "https://management.example.invalid",
+	};
+	assert.equal(
+		providerForModel("router", "gpt-5", "https://gateway.example.invalid/v1", split),
+		"codex",
+	);
+	assert.equal(
+		providerForModel("router", "gpt-5", "https://api.openai.com/v1", split),
+		undefined,
+	);
+});
+
+test("providerForModel keeps the name mapping when the proxy address is unknown", () => {
+	const proxy = { managementUrl: "https://cpa.example.invalid" };
+	assert.equal(
+		providerForModel("deepseek", "deepseek-flash", "https://api.deepseek.com"),
+		"deepseek",
+	);
+	assert.equal(
+		providerForModel("deepseek", "deepseek-flash", undefined, proxy),
+		"deepseek",
+	);
+	assert.equal(
+		providerForModel("deepseek", "deepseek-flash", "https://api.deepseek.com", {}),
+		"deepseek",
+	);
+	assert.equal(
+		providerForModel("deepseek", "deepseek-flash", "not a url", proxy),
+		"deepseek",
+	);
+	assert.equal(
+		providerForModel("deepseek", "deepseek-flash", "https://api.deepseek.com", { managementUrl: "::bad::" }),
+		"deepseek",
+	);
+	assert.equal(servedByProxy("https://api.deepseek.com", {}), undefined);
 });
 
 test("accountsForModel shows only accounts matching the active model", () => {

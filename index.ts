@@ -7,7 +7,6 @@ import { join } from "node:path";
 import { UsageController } from "./src/controller.js";
 import { loadSettings, saveSettings } from "./src/settings.js";
 import { showSettings } from "./src/settings-ui.js";
-import { providerForModel } from "./src/usage.js";
 import { setupManagement } from "./src/setup.js";
 
 const commandItems = [
@@ -63,10 +62,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("model_select", (event, ctx) => {
-		usage.modelSelected(
-			ctx,
-			providerForModel(event.model.provider, event.model.id),
-		);
+		usage.modelSelected(ctx, usage.activeProvider(event.model));
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {

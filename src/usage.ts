@@ -132,11 +132,50 @@ export async function resolveManagementSource(
 	};
 }
 
-/** Map the active Pi model to the matching CLIProxyAPI account provider. */
+type ProxyAddresses = Pick<ManagementSource, "providerBaseUrl" | "managementUrl">;
+
+/** One instance can expose inference and management on different paths or hosts. */
+function sameProxyHost(left: string, right: string): boolean | undefined {
+	try {
+		const first = new URL(left.trim());
+		const second = new URL(right.trim());
+		if (!["http:", "https:"].includes(first.protocol) ||
+			!["http:", "https:"].includes(second.protocol)) return undefined;
+		return first.host.toLowerCase() === second.host.toLowerCase();
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Whether CLIProxyAPI serves a model with that base URL. `undefined` means the
+ * answer is unknown (no model or no known proxy address), never "not served".
+ */
+export function servedByProxy(
+	modelBaseUrl: string | undefined,
+	source: ProxyAddresses,
+): boolean | undefined {
+	if (!modelBaseUrl) return undefined;
+	const known = [source.providerBaseUrl, source.managementUrl]
+		.filter((value): value is string => Boolean(value));
+	const verdicts = known.map((url) => sameProxyHost(url, modelBaseUrl));
+	if (verdicts.includes(true)) return true;
+	// An unparsable known address proves nothing; keep the name mapping.
+	return verdicts.length === 0 || verdicts.includes(undefined) ? undefined : false;
+}
+
+/**
+ * Map the active Pi model to the matching CLIProxyAPI account provider.
+ * A model served by another host never maps, so a native provider that shares a
+ * proxied provider's name cannot borrow that provider's accounts.
+ */
 export function providerForModel(
 	provider: string,
 	modelId: string,
+	modelBaseUrl?: string,
+	proxy?: ProxyAddresses,
 ): ProviderName | undefined {
+	if (proxy && servedByProxy(modelBaseUrl, proxy) === false) return undefined;
 	const value = `${provider}/${modelId}`.toLowerCase();
 	if (/(^|[\/_-])claude(?:[.\/_-]|$)/.test(value)) return "claude";
 	if (/(^|[\/_-])deepseek(?:[.\/_-]|$)/.test(value)) return "deepseek";

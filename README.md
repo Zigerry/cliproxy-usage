@@ -27,6 +27,7 @@ work… │ 7d ━━━━━─ left 85%    personal… │ 7d ━━━━─
 ## Features
 
 - Follows Pi's active model and displays only its matching account provider.
+- Tracks only models served by the configured CLIProxyAPI host, so a native provider of the same name never shows the proxy's accounts.
 - Shows remaining quota, reset countdowns, provider errors, and DeepSeek balances.
 - Opens details immediately from the session cache when available.
 - Refreshes stale data in the background and updates the TUI in place.
@@ -209,6 +210,8 @@ Configure DeepSeek under `openai-compatibility` with the exact `api.deepseek.com
 ### Widget is hidden
 
 Enable **Widget visibility** in `/cliproxy-usage settings` if you want the persistent display. The active model must also match a supported and enabled provider. `/cliproxy-usage status` reports visibility, mapping and configuration; details remain available when only the widget is hidden.
+
+A supported model is also ignored when it is not served by the configured CLIProxyAPI instance: its base URL must share a host with the provider or management URL. Native providers of the same name, for example a direct `deepseek` API key beside proxied `deepseek-*` models, stay untracked so their quota cannot be mistaken for a proxy account.
 
 ### Git installation fails with `spawn git ENOENT`
 
