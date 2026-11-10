@@ -308,3 +308,29 @@ test("combined provider/visibility changes preserve live server waits on disable
 	assert.equal(h.requests, count);
 	assert.equal(h.controller.getSnapshot(h.ctx).eligibility?.manualAllowedAt, START + 600_000);
 });
+
+test("widget never attributes another host's accounts to a similarly named provider", async (t) => {
+	t.mock.timers.enable({ apis: ["Date"], now: START });
+	const h = await harness(t);
+	const model = h.ctx.model as { provider: string; id: string; baseUrl?: string };
+	await h.refresh();
+	assert.notEqual(h.widget, undefined);
+	// A native provider that shares the proxied model's name is not served by the
+	// proxy, so it must not reuse the codex account cache or start its own reads.
+	model.provider = "openai";
+	model.id = "gpt-5";
+	model.baseUrl = "https://api.openai.invalid/v1";
+	const snapshot = h.controller.getSnapshot(h.ctx);
+	assert.equal(snapshot.provider, undefined);
+	assert.equal(snapshot.state, "unsupported");
+	assert.deepEqual(snapshot.accounts, []);
+	h.controller.renderCurrentModel(h.ctx);
+	assert.equal(h.widget, undefined);
+	// A proxied model on the configured host still maps to its account provider.
+	model.provider = "cliproxyapi";
+	model.baseUrl = "https://management.example.invalid/v1";
+	assert.equal(h.controller.getSnapshot(h.ctx).provider, "codex");
+	assert.equal(h.controller.activeProvider(model), "codex");
+	h.controller.renderCurrentModel(h.ctx);
+	assert.notEqual(h.widget, undefined);
+});

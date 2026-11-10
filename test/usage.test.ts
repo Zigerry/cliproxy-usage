@@ -4,10 +4,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-	accountsForModel,
 	providerForModel,
 	readAccounts,
 	resolveManagementSource,
+	servedByProxy,
 	validateManagementAccess,
 } from "../src/usage.js";
 import type { AccountUsage, Settings } from "../src/types.js";
@@ -383,33 +383,57 @@ test("providerForModel maps CLIProxyAPI model ids to account types", () => {
 	);
 });
 
-test("accountsForModel shows only accounts matching the active model", () => {
-	const items: AccountUsage[] = [
-		{ provider: "codex", label: "gpt", windows: [] },
-		{ provider: "deepseek", label: "deepseek", windows: [] },
-		{ provider: "kimi", label: "kimi", windows: [] },
-		{ provider: "claude", label: "claude", windows: [] },
-	];
-	assert.deepEqual(
-		accountsForModel(items, "cliproxyapi", "gpt-5.6-sol").map(
-			(item) => item.label,
-		),
-		["gpt"],
+test("providerForModel never claims accounts for models served elsewhere", () => {
+	const proxy = { managementUrl: "https://cpa.example.invalid" };
+	// A native provider of the same name is not the proxy's account.
+	assert.equal(
+		providerForModel("deepseek", "deepseek-flash", "https://api.deepseek.com", proxy),
+		undefined,
 	);
-	assert.deepEqual(
-		accountsForModel(items, "cliproxyapi", "kimi-k3").map(
-			(item) => item.label,
-		),
-		["kimi"],
+	assert.equal(
+		providerForModel("router", "deepseek-flash", "https://cpa.example.invalid/v1", proxy),
+		"deepseek",
 	);
-	assert.deepEqual(
-		accountsForModel(items, "cliproxyapi", "deepseek-v4-flash").map(
-			(item) => item.label,
-		),
-		["deepseek"],
+	assert.equal(
+		providerForModel("router", "claude-sonnet-4-6", "https://CPA.example.invalid/v1/", proxy),
+		"claude",
 	);
-	assert.deepEqual(
-		accountsForModel(items, "cliproxyapi", "mimo-v2.5-pro"),
-		[],
+	// Inference and management may live on different hosts of one instance.
+	const split = {
+		providerBaseUrl: "https://gateway.example.invalid",
+		managementUrl: "https://management.example.invalid",
+	};
+	assert.equal(
+		providerForModel("router", "gpt-5", "https://gateway.example.invalid/v1", split),
+		"codex",
 	);
+	assert.equal(
+		providerForModel("router", "gpt-5", "https://api.openai.com/v1", split),
+		undefined,
+	);
+});
+
+test("providerForModel keeps the name mapping when the proxy address is unknown", () => {
+	const proxy = { managementUrl: "https://cpa.example.invalid" };
+	assert.equal(
+		providerForModel("deepseek", "deepseek-flash", "https://api.deepseek.com"),
+		"deepseek",
+	);
+	assert.equal(
+		providerForModel("deepseek", "deepseek-flash", undefined, proxy),
+		"deepseek",
+	);
+	assert.equal(
+		providerForModel("deepseek", "deepseek-flash", "https://api.deepseek.com", {}),
+		"deepseek",
+	);
+	assert.equal(
+		providerForModel("deepseek", "deepseek-flash", "not a url", proxy),
+		"deepseek",
+	);
+	assert.equal(
+		providerForModel("deepseek", "deepseek-flash", "https://api.deepseek.com", { managementUrl: "::bad::" }),
+		"deepseek",
+	);
+	assert.equal(servedByProxy("https://api.deepseek.com", {}), undefined);
 });
