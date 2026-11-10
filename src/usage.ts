@@ -185,17 +185,6 @@ export function providerForModel(
 	return undefined;
 }
 
-export function accountsForModel(
-	items: AccountUsage[],
-	provider: string,
-	modelId: string,
-): AccountUsage[] {
-	const accountProvider = providerForModel(provider, modelId);
-	return accountProvider
-		? items.filter((item) => item.provider === accountProvider)
-		: [];
-}
-
 function providerName(value?: string): ProviderName | undefined {
 	const provider = value?.toLowerCase();
 	if (provider === "xai") return "grok";

@@ -4,7 +4,6 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-	accountsForModel,
 	providerForModel,
 	readAccounts,
 	resolveManagementSource,
@@ -437,35 +436,4 @@ test("providerForModel keeps the name mapping when the proxy address is unknown"
 		"deepseek",
 	);
 	assert.equal(servedByProxy("https://api.deepseek.com", {}), undefined);
-});
-
-test("accountsForModel shows only accounts matching the active model", () => {
-	const items: AccountUsage[] = [
-		{ provider: "codex", label: "gpt", windows: [] },
-		{ provider: "deepseek", label: "deepseek", windows: [] },
-		{ provider: "kimi", label: "kimi", windows: [] },
-		{ provider: "claude", label: "claude", windows: [] },
-	];
-	assert.deepEqual(
-		accountsForModel(items, "cliproxyapi", "gpt-5.6-sol").map(
-			(item) => item.label,
-		),
-		["gpt"],
-	);
-	assert.deepEqual(
-		accountsForModel(items, "cliproxyapi", "kimi-k3").map(
-			(item) => item.label,
-		),
-		["kimi"],
-	);
-	assert.deepEqual(
-		accountsForModel(items, "cliproxyapi", "deepseek-v4-flash").map(
-			(item) => item.label,
-		),
-		["deepseek"],
-	);
-	assert.deepEqual(
-		accountsForModel(items, "cliproxyapi", "mimo-v2.5-pro"),
-		[],
-	);
 });
